@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f5f3f0" />
+    <title>FaceStyle AI MVP</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <section id="intakeScreen" class="intake-screen" aria-label="AI 妆容与造型推荐问询">
+      <div class="intake-copy">
+        <p class="eyebrow">FaceStyle AI</p>
+        <h1>专属妆容档案</h1>
+        <p>先选择场景、目标和预算，系统会生成一版妆容方案；上传照片或开启摄像头后，再结合脸部关键点、光线和肤色采样修正推荐。</p>
+        <div class="trust-strip" aria-label="数据处理说明">
+          <span>本地分析</span>
+          <span>默认不训练</span>
+          <span>可清除</span>
+        </div>
+      </div>
+
+      <form class="intake-form" aria-label="试妆目标问询">
+        <div class="form-header">
+          <span>风格问卷</span>
+          <small>9 项</small>
+        </div>
+        <fieldset>
+          <legend>场景</legend>
+          <div class="segmented">
+            <label><input type="radio" name="occasion" value="daily" data-pref="occasion" checked /><span>通勤</span></label>
+            <label><input type="radio" name="occasion" value="date" data-pref="occasion" /><span>约会</span></label>
+            <label><input type="radio" name="occasion" value="interview" data-pref="occasion" /><span>面试</span></label>
+            <label><input type="radio" name="occasion" value="photo" data-pref="occasion" /><span>拍照</span></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>目标</legend>
+          <div class="segmented">
+            <label><input type="radio" name="goal" value="fresh" data-pref="goal" checked /><span>提气色</span></label>
+            <label><input type="radio" name="goal" value="bright" data-pref="goal" /><span>显白</span></label>
+            <label><input type="radio" name="goal" value="lowkey" data-pref="goal" /><span>低调</span></label>
+            <label><input type="radio" name="goal" value="presence" data-pref="goal" /><span>气场</span></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>妆感</legend>
+          <div class="segmented">
+            <label><input type="radio" name="finish" value="natural" data-pref="finish" checked /><span>清透</span></label>
+            <label><input type="radio" name="finish" value="mist" data-pref="finish" /><span>柔雾</span></label>
+            <label><input type="radio" name="finish" value="glow" data-pref="finish" /><span>水光</span></label>
+            <label><input type="radio" name="finish" value="bold" data-pref="finish" /><span>显色</span></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>原照片妆容</legend>
+          <div class="segmented">
+            <label><input type="radio" name="existingMakeup" value="bare" data-pref="existingMakeup" checked /><span>素颜</span></label>
+            <label><input type="radio" name="existingMakeup" value="light" data-pref="existingMakeup" /><span>淡妆</span></label>
+            <label><input type="radio" name="existingMakeup" value="visible" data-pref="existingMakeup" /><span>明显妆容</span></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>预算</legend>
+          <div class="segmented">
+            <label><input type="radio" name="budget" value="starter" data-pref="budget" checked /><span>平价</span></label>
+            <label><input type="radio" name="budget" value="balanced" data-pref="budget" /><span>均衡</span></label>
+            <label><input type="radio" name="budget" value="premium" data-pref="budget" /><span>进阶</span></label>
+            <label><input type="radio" name="budget" value="sensitive" data-pref="budget" /><span>敏感肌</span></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>底妆覆盖</legend>
+          <div class="segmented">
+            <label><input type="radio" name="baseCoverage" value="sheer" data-pref="baseCoverage" checked /><span>轻薄</span></label>
+            <label><input type="radio" name="baseCoverage" value="natural" data-pref="baseCoverage" /><span>自然</span></label>
+            <label><input type="radio" name="baseCoverage" value="medium" data-pref="baseCoverage" /><span>中等</span></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>眉妆方向</legend>
+          <div class="segmented">
+            <label><input type="radio" name="browStyle" value="natural" data-pref="browStyle" checked /><span>原生</span></label>
+            <label><input type="radio" name="browStyle" value="defined" data-pref="browStyle" /><span>清晰</span></label>
+            <label><input type="radio" name="browStyle" value="sharp" data-pref="browStyle" /><span>利落</span></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>眼妆重点</legend>
+          <div class="segmented">
+            <label><input type="radio" name="eyeFocus" value="natural" data-pref="eyeFocus" checked /><span>自然</span></label>
+            <label><input type="radio" name="eyeFocus" value="bright" data-pref="eyeFocus" /><span>放大</span></label>
+            <label><input type="radio" name="eyeFocus" value="lifted" data-pref="eyeFocus" /><span>提拉</span></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>唇部质地</legend>
+          <div class="segmented">
+            <label><input type="radio" name="lipTexture" value="stain" data-pref="lipTexture" checked /><span>染唇</span></label>
+            <label><input type="radio" name="lipTexture" value="satin" data-pref="lipTexture" /><span>缎光</span></label>
+            <label><input type="radio" name="lipTexture" value="mist" data-pref="lipTexture" /><span>柔雾</span></label>
+            <label><input type="radio" name="lipTexture" value="glow" data-pref="lipTexture" /><span>水光</span></label>
+          </div>
+        </fieldset>
+
+        <div id="intakePreviewCard" class="intake-preview" aria-live="polite">
+          <div class="recommend-head">
+            <span>推荐预览</span>
+            <small id="intakePreviewState">问询推荐</small>
+          </div>
+          <div class="preview-main">
+            <div>
+              <strong id="intakePreviewTitle">等待推荐</strong>
+              <p id="intakePreviewReason">选择场景、目标和妆感后，会先生成一版不需要摄像头的推荐。</p>
+            </div>
+            <div id="intakePreviewSwatches" class="preview-swatches" aria-hidden="true"></div>
+          </div>
+          <div id="intakePreviewChips" class="recommend-chips"></div>
+        </div>
+
+        <label class="consent-line">
+          <input id="privacyConsent" type="checkbox" />
+          <span>我同意仅为本次体验在浏览器中处理自拍或摄像头画面；照片默认不上传、不用于训练，并可随时清除。</span>
+        </label>
+        <p id="consentError" class="form-error" role="alert"></p>
+
+        <button id="intakeContinueBtn" class="primary-btn wide-btn" type="button">
+          <span class="btn-glyph spark-glyph" aria-hidden="true"></span>
+          生成风格档案
+        </button>
+      </form>
+    </section>
+
+    <main id="appShell" class="app-shell is-hidden">
+      <section class="stage" aria-label="AR 试妆预览">
+        <video id="camera" playsinline muted></video>
+        <canvas id="preview"></canvas>
+
+        <div class="topbar">
+          <div>
+            <p class="eyebrow">FaceStyle AI</p>
+            <h1>AI 试妆</h1>
+          </div>
+          <div id="statusPill" class="status-pill" data-state="idle">
+            <span></span>
+            <strong>准备中</strong>
+          </div>
+        </div>
+
+        <div id="emptyState" class="empty-state">
+          <div class="face-mark">
+            <span class="eye left"></span>
+            <span class="eye right"></span>
+            <span class="mouth"></span>
+          </div>
+          <p>开启摄像头或上传照片后，系统会生成更贴合当前脸部画面的推荐。</p>
+        </div>
+
+        <div class="compare-toggle" aria-label="Before and after toggle">
+          <span>Before</span>
+          <label class="switch">
+            <input id="beforeToggle" type="checkbox" checked />
+            <i></i>
+          </label>
+          <span>After</span>
+        </div>
+      </section>
+
+      <aside class="panel" aria-label="试妆控制面板">
+        <div class="panel-section">
+          <div class="section-title">
+            <span>风格档案</span>
+            <small id="profileState">问卷生成</small>
+          </div>
+          <div class="target-summary">
+            <div id="preferenceSummaryChips" class="recommend-chips"></div>
+            <button id="editPreferencesBtn" class="secondary-btn compact-btn" type="button">重新填写</button>
+          </div>
+          <div id="profileSummary" class="profile-summary" aria-live="polite">
+            <span>等待照片分析</span>
+            <strong>先按问卷生成妆容，上传照片后补充肤色与光线判断。</strong>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <div class="section-title">
+            <span>输入</span>
+            <small id="runtimeLabel">MediaPipe 加载中</small>
+          </div>
+          <div class="button-row">
+            <label class="primary-btn" for="photoInput">
+              <span class="btn-glyph upload-glyph" aria-hidden="true"></span>
+              上传照片
+            </label>
+            <button id="startCameraBtn" class="secondary-btn" type="button">
+              <span class="btn-glyph camera-glyph" aria-hidden="true"></span>
+              开启摄像头
+            </button>
+            <input id="photoInput" type="file" accept="image/*" />
+          </div>
+          <p class="hint">
+            优先上传清晰的单人正脸照片；摄像头仅在当前浏览器中参与识别，移动浏览器通常需要 HTTPS。
+          </p>
+          <p id="inputGuidance" class="input-guidance" data-tone="idle">
+            上传清晰单人正脸照片，或开启摄像头后让脸部保持在画面中央。
+          </p>
+        </div>
+
+        <div class="panel-section developer-only">
+          <div class="section-title">
+            <span>照片测试</span>
+            <small id="testRunCount">0 条</small>
+          </div>
+          <div class="sample-grid" aria-label="照片测试样本标签">
+            <button class="sample-chip active" type="button" data-sample="front-natural">正脸自然光</button>
+            <button class="sample-chip" type="button" data-sample="warm-light">暖光室内</button>
+            <button class="sample-chip" type="button" data-sample="low-light">弱光</button>
+            <button class="sample-chip" type="button" data-sample="side-angle">侧脸角度</button>
+            <button class="sample-chip" type="button" data-sample="deep-tone">深肤色</button>
+            <button class="sample-chip" type="button" data-sample="fair-tone">浅肤色</button>
+          </div>
+          <label class="note-field">
+            <span>测试备注</span>
+            <input id="testNoteInput" type="text" maxlength="80" placeholder="例如：口红边缘偏重、腮红位置 OK" />
+          </label>
+          <div class="validation-meta" aria-label="当前验证状态">
+            <span>Quality Gate: <strong id="qualityGateLabel">等待样本</strong></span>
+            <span>Render: <strong id="renderVersionLabel">render-v1-lip-rebalance</strong></span>
+          </div>
+          <div class="score-grid" aria-label="Round 1 评分">
+            <label><span>关键点</span><select data-validation-score="landmarkStability"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+            <label><span>唇线</span><select data-validation-score="lipEdge"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+            <label><span>腮红</span><select data-validation-score="blushPlacement"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+            <label><span>眼影</span><select data-validation-score="eyeshadowAlignment"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+            <label><span>显色</span><select data-validation-score="colorVisibility"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+            <label><span>审美</span><select data-validation-score="recommendationTaste"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+            <label><span>解释</span><select data-validation-score="explanationTrust"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+          </div>
+          <div class="issue-grid" aria-label="失败标签">
+            <button class="sample-chip" type="button" data-validation-issue="lip_edge_overdraw">唇线外溢</button>
+            <button class="sample-chip" type="button" data-validation-issue="lip_too_strong">口红过重</button>
+            <button class="sample-chip" type="button" data-validation-issue="blush_not_visible">腮红不可见</button>
+            <button class="sample-chip" type="button" data-validation-issue="blush_too_high">腮红过高</button>
+            <button class="sample-chip" type="button" data-validation-issue="eyeshadow_not_visible">眼影不可见</button>
+            <button class="sample-chip" type="button" data-validation-issue="eyeshadow_drift">眼影漂移</button>
+            <button class="sample-chip" type="button" data-validation-issue="color_not_visible">颜色不可见</button>
+            <button class="sample-chip" type="button" data-validation-issue="retake_needed">需要重拍</button>
+            <button class="sample-chip" type="button" data-validation-issue="weak_explanation">解释偏弱</button>
+            <button class="sample-chip" type="button" data-validation-issue="quality_gate_unclear">质量提示不清</button>
+          </div>
+          <button id="recordTestBtn" class="secondary-btn wide-btn" type="button">记录当前样本</button>
+          <div id="testRunList" class="test-run-list" aria-live="polite"></div>
+        </div>
+
+        <div class="panel-section developer-only">
+          <div class="section-title">
+            <span>专家评审</span>
+            <small id="expertReviewCount">0 条</small>
+          </div>
+          <div class="expert-grid" aria-label="专家评审标签">
+            <button class="sample-chip active" type="button" data-expert-rating="suitable">适合</button>
+            <button class="sample-chip" type="button" data-expert-rating="wearable">可日常</button>
+            <button class="sample-chip" type="button" data-expert-rating="too-strong">太浓</button>
+            <button class="sample-chip" type="button" data-expert-rating="wrong-color">色不对</button>
+            <button class="sample-chip" type="button" data-expert-rating="wrong-placement">位置不对</button>
+            <button class="sample-chip" type="button" data-expert-rating="retest">需复测</button>
+          </div>
+          <label class="note-field">
+            <span>评审备注</span>
+            <input id="expertNoteInput" type="text" maxlength="100" placeholder="例如：唇色 OK，腮红需要靠后" />
+          </label>
+          <button id="recordExpertBtn" class="secondary-btn wide-btn" type="button">记录专家评审</button>
+          <div id="expertReviewList" class="test-run-list" aria-live="polite"></div>
+        </div>
+
+        <div class="panel-section developer-only">
+          <div class="section-title">
+            <span>朋友试玩汇总</span>
+            <small id="friendReviewCount">0 条</small>
+          </div>
+          <div id="friendReviewSummary" class="test-run-list" aria-live="polite"></div>
+        </div>
+
+        <div class="panel-section">
+          <div class="section-title">
+            <span>妆容</span>
+            <small id="lookName">清透通勤</small>
+          </div>
+          <div class="recommend-card" aria-live="polite">
+            <div class="recommend-head">
+              <span>AI 推荐</span>
+              <small id="recommendationState">等待人脸</small>
+            </div>
+            <strong id="recommendationTitle">等待分析</strong>
+            <p id="recommendationReason">识别人脸后，会根据光线、角度和当前画面自动挑选更适合的妆容。</p>
+            <div id="recommendationChips" class="recommend-chips"></div>
+            <div class="recommend-actions">
+              <span id="recommendationConfidence">匹配度 --</span>
+              <button id="applyRecommendationBtn" class="secondary-btn compact-btn" type="button" disabled>应用推荐</button>
+            </div>
+          </div>
+          <div class="look-grid" id="lookGrid"></div>
+        </div>
+
+        <div class="panel-section">
+          <div class="section-title">
+            <span>造型建议</span>
+            <small>妆发穿搭</small>
+          </div>
+          <div id="stylePlan" class="style-plan" aria-live="polite"></div>
+        </div>
+
+        <div class="panel-section">
+          <div class="section-title">
+            <span>完整妆容方案</span>
+            <small>10 个步骤</small>
+          </div>
+          <div id="makeupPlanSummary" class="makeup-plan-summary" aria-live="polite"></div>
+        </div>
+
+        <div class="panel-section">
+          <div class="section-title">
+            <span>产品清单</span>
+            <small id="productBudgetLabel">平价</small>
+          </div>
+          <div id="productList" class="product-list" aria-live="polite"></div>
+        </div>
+
+        <div class="panel-section">
+          <div class="section-title">
+            <span>强度</span>
+            <small id="qualityLabel">等待人脸</small>
+          </div>
+
+          <label class="control-line">
+            <span>口红</span>
+            <input id="lipIntensity" type="range" min="0" max="1" step="0.01" value="0.54" />
+            <output id="lipValue">54</output>
+          </label>
+
+          <label class="control-line">
+            <span>腮红</span>
+            <input id="blushIntensity" type="range" min="0" max="1" step="0.01" value="0.52" />
+            <output id="blushValue">52</output>
+          </label>
+
+          <label class="control-line">
+            <span>眼影</span>
+            <input id="eyeIntensity" type="range" min="0" max="1" step="0.01" value="0.42" />
+            <output id="eyeValue">42</output>
+          </label>
+        </div>
+
+        <div class="panel-section">
+          <div class="section-title">
+            <span>颜色</span>
+            <small>适合快速试色</small>
+          </div>
+          <div class="color-row">
+            <label>
+              <span>唇色</span>
+              <input id="lipColor" type="color" value="#b85f6a" />
+            </label>
+            <label>
+              <span>腮红</span>
+              <input id="blushColor" type="color" value="#d9968c" />
+            </label>
+            <label>
+              <span>眼影</span>
+              <input id="eyeColor" type="color" value="#a77a66" />
+            </label>
+          </div>
+        </div>
+
+        <div class="panel-section action-section">
+          <button id="captureBtn" class="primary-btn" type="button">
+            <span class="btn-glyph save-glyph" aria-hidden="true"></span>
+            保存当前效果
+          </button>
+          <button id="openResultBtn" class="primary-btn" type="button">查看完整方案</button>
+          <button id="clearDataBtn" class="secondary-btn" type="button">清除本地记录</button>
+          <a id="downloadLink" class="download-link" download="facestyle-tryon.png">下载截图</a>
+          <div class="developer-tools developer-only">
+            <button id="exportDataBtn" class="secondary-btn" type="button">导出本地数据</button>
+            <button id="exportCsvBtn" class="secondary-btn" type="button">导出评审 CSV</button>
+            <a id="dataDownloadLink" class="download-link" download="facestyle-local-data.json">下载数据</a>
+            <a id="csvDownloadLink" class="download-link" download="facestyle-review-data.csv">下载 CSV</a>
+          </div>
+          <div class="feedback-box">
+            <span id="feedbackState">本地反馈</span>
+            <div class="feedback-grid" aria-label="推荐反馈">
+              <button class="secondary-btn compact-btn" type="button" data-feedback="like">喜欢</button>
+              <button class="secondary-btn compact-btn" type="button" data-feedback="dislike">不喜欢</button>
+              <button class="secondary-btn compact-btn" type="button" data-feedback="lighter">太浓</button>
+              <button class="secondary-btn compact-btn" type="button" data-feedback="stronger">太淡</button>
+              <button class="secondary-btn compact-btn" type="button" data-feedback="wrong-color">色不对</button>
+              <button class="secondary-btn compact-btn" type="button" data-feedback="wrong-style">风格不对</button>
+              <button class="secondary-btn compact-btn" type="button" data-feedback="switch">换风格</button>
+            </div>
+            <label class="note-field feedback-note">
+              <span>选填：哪里最有用或最困惑？</span>
+              <input id="feedbackNoteInput" type="text" maxlength="120" placeholder="例如：腮红位置不自然" />
+            </label>
+          </div>
+          <section class="friend-review" aria-label="试玩后反馈">
+            <span>试玩后花 30 秒告诉我：这版值不值得继续做？</span>
+            <div class="friend-review-grid">
+              <label>
+                <span>隐私感受</span>
+                <select id="friendPrivacyComfort">
+                  <option value="">请选择</option>
+                  <option value="comfortable">放心</option>
+                  <option value="hesitant">有点犹豫</option>
+                  <option value="uncomfortable">不放心</option>
+                </select>
+              </label>
+              <label>
+                <span>推荐像你吗？</span>
+                <select id="friendFitScore">
+                  <option value="">请选择</option>
+                  <option value="1">1 分</option>
+                  <option value="2">2 分</option>
+                  <option value="3">3 分</option>
+                  <option value="4">4 分</option>
+                  <option value="5">5 分</option>
+                </select>
+              </label>
+              <label>
+                <span>妆效自然吗？</span>
+                <select id="friendNaturalnessScore">
+                  <option value="">请选择</option>
+                  <option value="1">1 分</option>
+                  <option value="2">2 分</option>
+                  <option value="3">3 分</option>
+                  <option value="4">4 分</option>
+                  <option value="5">5 分</option>
+                </select>
+              </label>
+              <label>
+                <span>愿意再用吗？</span>
+                <select id="friendReuseIntent">
+                  <option value="">请选择</option>
+                  <option value="yes">愿意</option>
+                  <option value="maybe">也许</option>
+                  <option value="no">不愿意</option>
+                </select>
+              </label>
+            </div>
+            <label class="note-field friend-review-note">
+              <span>选填：最困惑、最有用或最希望改的一点</span>
+              <input id="friendReviewNoteInput" type="text" maxlength="160" placeholder="例如：推荐颜色不错，但眼影范围不自然" />
+            </label>
+            <button id="recordFriendReviewBtn" class="secondary-btn wide-btn" type="button">保存试玩总结</button>
+          </section>
+          <p class="hint">当前 MVP 不上传原图，也不会把人脸画面用于模型训练。</p>
+        </div>
+      </aside>
+    </main>
+
+    <section id="resultSheet" class="result-sheet is-hidden" aria-label="完整推荐方案" aria-modal="true" role="dialog">
+      <div class="result-page">
+        <div class="result-topbar">
+          <div>
+            <p class="eyebrow">FaceStyle AI</p>
+            <h2>完整造型方案</h2>
+          </div>
+          <button id="closeResultBtn" class="secondary-btn compact-btn" type="button">关闭</button>
+        </div>
+        <div class="result-hero">
+          <div>
+            <span id="resultMode">问卷推荐</span>
+            <strong id="resultLookName">清透通勤</strong>
+            <p id="resultReason">等待推荐生成。</p>
+          </div>
+          <div id="resultSwatches" class="result-swatches" aria-hidden="true"></div>
+        </div>
+        <div class="result-grid">
+          <section>
+            <h3>风格档案</h3>
+            <div id="resultProfile" class="result-text"></div>
+          </section>
+          <section>
+            <h3>妆发穿搭</h3>
+            <div id="resultStylePlan" class="result-list"></div>
+          </section>
+          <section class="result-makeup-section">
+            <h3>完整妆容方案</h3>
+            <div id="resultMakeupPlan" class="makeup-plan-list"></div>
+          </section>
+          <section>
+            <h3>当前试色预览</h3>
+            <div id="resultProducts" class="result-list"></div>
+          </section>
+          <section class="developer-only">
+            <h3>测试记录</h3>
+            <div id="resultTests" class="result-list"></div>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
