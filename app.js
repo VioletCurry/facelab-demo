@@ -448,6 +448,9 @@ const makeupLayerCtx = makeupLayer.getContext("2d");
 let faceLandmarker;
 let FaceLandmarkerClass;
 let FilesetResolverClass;
+let modelState = "loading";
+let pendingPhotoFile = null;
+let modelLoadNoticeTimer = null;
 let activeLook = { ...looks[0] };
 let running = false;
 let mode = "idle";
@@ -490,7 +493,7 @@ const upperLipOuter = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291];
 const upperLipInner = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308];
 const lowerLipOuter = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291];
 const lowerLipInner = [78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308];
-const developerMode = new URLSearchParams(window.location.search).get("mode") === "developer";
+const developerMode = false; // Friends release: developer tools are build-time disabled.
 
 document.body.classList.toggle("developer-mode", developerMode);
 
@@ -512,6 +515,17 @@ async function init() {
   renderValidationState();
   setStatus("idle", "加载模型");
   setInputGuidance("idle", "上传清晰单人正脸照片，或开启摄像头后让脸部保持在画面中央。");
+  modelLoadNoticeTimer = window.setTimeout(() => {
+    if (modelState !== "loading") return;
+    refs.runtimeLabel.textContent = "首次加载较慢";
+    setStatus("idle", pendingPhotoFile ? "照片已选择" : "正在加载模型");
+    setInputGuidance(
+      "idle",
+      pendingPhotoFile
+        ? "照片已保留，模型加载完成后会自动分析。首次加载约 15 MB，请保持页面打开。"
+        : "首次加载约 15 MB，请保持页面打开。你也可以先选择照片，模型就绪后会自动分析。"
+    );
+  }, 6000);
 
   try {
     const vision = await import(
@@ -523,23 +537,70 @@ async function init() {
     const filesetResolver = await FilesetResolverClass.forVisionTasks(
       "./node_modules/@mediapipe/tasks-vision/wasm"
     );
-    faceLandmarker = await FaceLandmarkerClass.createFromOptions(filesetResolver, {
-      baseOptions: {
-        modelAssetPath: modelUrl,
-        delegate: "GPU",
-      },
-      outputFaceBlendshapes: true,
-      outputFacialTransformationMatrixes: true,
-      runningMode: "VIDEO",
-      numFaces: 1,
-    });
-    refs.runtimeLabel.textContent = "模型已就绪";
+    const compatibleRuntime = await createCompatibleFaceLandmarker(filesetResolver);
+    faceLandmarker = compatibleRuntime.landmarker;
+    modelState = "ready";
+    window.clearTimeout(modelLoadNoticeTimer);
+    refs.runtimeLabel.textContent =
+      compatibleRuntime.delegate === "CPU" ? "模型已就绪（兼容）" : "模型已就绪";
     setStatus("idle", "可开始");
+    if (pendingPhotoFile) {
+      const queuedFile = pendingPhotoFile;
+      pendingPhotoFile = null;
+      await processPhotoFile(queuedFile);
+    }
   } catch (error) {
     console.error(error);
+    modelState = "failed";
+    pendingPhotoFile = null;
+    window.clearTimeout(modelLoadNoticeTimer);
     refs.runtimeLabel.textContent = "模型加载失败";
     setStatus("error", "加载失败");
+    setInputGuidance(
+      "error",
+      "模型加载失败。请用 Safari 打开此页面并刷新；如果仍失败，请稍后重试。"
+    );
   }
+}
+
+function isIosDevice() {
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
+}
+
+function isEmbeddedIosBrowser() {
+  if (!isIosDevice()) return false;
+  return !/Version\/[\d.]+.*Safari/.test(navigator.userAgent);
+}
+
+async function createCompatibleFaceLandmarker(filesetResolver) {
+  const delegates = isEmbeddedIosBrowser() ? ["CPU", "GPU"] : ["GPU", "CPU"];
+  let lastError;
+
+  for (const delegate of delegates) {
+    try {
+      refs.runtimeLabel.textContent =
+        delegate === "CPU" ? "兼容模式加载中" : "MediaPipe 加载中";
+      const landmarker = await FaceLandmarkerClass.createFromOptions(filesetResolver, {
+        baseOptions: {
+          modelAssetPath: modelUrl,
+          delegate,
+        },
+        outputFaceBlendshapes: true,
+        outputFacialTransformationMatrixes: true,
+        runningMode: "VIDEO",
+        numFaces: 1,
+      });
+      return { landmarker, delegate };
+    } catch (error) {
+      console.warn(`MediaPipe ${delegate} delegate failed`, error);
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error("MediaPipe could not be initialized");
 }
 
 function renderLooks() {
@@ -713,7 +774,14 @@ function setLook(look) {
 
 async function startCamera() {
   if (!faceLandmarker) {
-    setStatus("error", "模型未就绪");
+    const failed = modelState === "failed";
+    setStatus(failed ? "error" : "idle", failed ? "模型加载失败" : "模型加载中");
+    setInputGuidance(
+      failed ? "error" : "idle",
+      failed
+        ? "请用 Safari 打开此页面并刷新，然后再开启摄像头。"
+        : "模型仍在加载。首次加载约 15 MB，完成后再开启摄像头。"
+    );
     return;
   }
 
@@ -752,7 +820,42 @@ async function startCamera() {
 
 async function handlePhotoUpload(event) {
   const [file] = event.target.files;
-  if (!file || !faceLandmarker) return;
+  event.target.value = "";
+  if (!file) return;
+
+  if (!faceLandmarker) {
+    if (modelState === "failed") {
+      setStatus("error", "模型加载失败");
+      setInputGuidance("error", "照片未处理。请用 Safari 打开此页面并刷新后重试。");
+      return;
+    }
+    pendingPhotoFile = file;
+    setStatus("idle", "照片已选择");
+    setInputGuidance(
+      "idle",
+      "照片已保留，模型加载完成后会自动分析。首次加载约 15 MB，请保持页面打开。"
+    );
+    return;
+  }
+
+  await processPhotoFile(file);
+}
+
+async function processPhotoFile(file) {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    await loadPhotoSource(objectUrl);
+  } catch (error) {
+    console.error(error);
+    setStatus("error", "照片读取失败");
+    setInputGuidance("error", "无法读取这张照片，请换一张 JPG、PNG 或 HEIC 照片重试。");
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function loadPhotoSource(source) {
+  if (!faceLandmarker) return;
 
   stopCameraTracks();
   stopLoop();
@@ -763,13 +866,21 @@ async function handlePhotoUpload(event) {
   setStatus("idle", "分析照片");
   setInputGuidance("idle", "正在分析照片。请优先使用单人正脸、脸部完整、光线均匀的图片。");
 
-  const image = new Image();
-  image.decoding = "async";
-  image.onload = async () => {
-    photoImage = image;
-    await drawPhotoFrame();
-  };
-  image.src = URL.createObjectURL(file);
+  await new Promise((resolve, reject) => {
+    const image = new Image();
+    image.decoding = "async";
+    image.onload = async () => {
+      try {
+        photoImage = image;
+        await drawPhotoFrame();
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    };
+    image.onerror = () => reject(new Error("Photo could not be loaded"));
+    image.src = source;
+  });
 }
 
 function loopCamera() {
