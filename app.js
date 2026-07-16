@@ -18,7 +18,6 @@ import {
   smoothFaceLandmarks,
 } from "./face-analysis.mjs?v=7.3-architecture";
 import {
-  average,
   clamp,
   distance,
   mapRange,
@@ -27,6 +26,25 @@ import { neutralTone } from "./render/color.mjs?v=7.3-architecture";
 import { clearStores, createArrayStore, createObjectStore } from "./persistence.mjs?v=7.3-architecture";
 import { releaseConfig } from "./release-config.mjs?v=7.3-architecture";
 import { collectUiRefs } from "./ui-refs.mjs?v=7.3-architecture";
+import {
+  issueSummaryText,
+  scoreSummaryText,
+  testMetricText,
+} from "./ui-formatters.mjs?v=7.3-architecture";
+import {
+  renderExpertReviewList,
+  renderFriendReviewList,
+  renderIntakePreviewPanel,
+  renderLookRecommendationMarker,
+  renderMakeupPlanSummary as renderMakeupPlanSummaryView,
+  renderPreferenceSummary as renderPreferenceSummaryView,
+  renderProductList as renderProductListView,
+  renderProfileSummary as renderProfileSummaryView,
+  renderRecommendationPanel,
+  renderStylePlan as renderStylePlanView,
+  renderTestRunList,
+  renderValidationState as renderValidationStateView,
+} from "./ui-renderer.mjs?v=7.3-architecture";
 import { createMakeupRenderer, makeupSideVisibility } from "./makeup-renderer.mjs?v=7.3-architecture";
 import {
   buildReviewRows,
@@ -985,59 +1003,46 @@ function updateRecommendationUI(recommendation) {
   if (!recommendation) {
     activeRecommendation = null;
     updateIntakePreview(null);
-    delete refs.applyRecommendationBtn.dataset.lookId;
-    refs.recommendationState.textContent = "等待人脸";
-    refs.recommendationTitle.textContent = "等待分析";
-    refs.recommendationReason.textContent = "识别人脸后，会根据光线、角度和当前画面自动挑选更适合的妆容。";
-    refs.recommendationConfidence.textContent = "匹配度 --";
-    refs.recommendationChips.innerHTML = "";
-    refs.applyRecommendationBtn.disabled = true;
+    renderRecommendationPanel(recommendationPanelElements(), null);
     updateLookRecommendationMarker(null);
     return;
   }
 
   activeRecommendation = recommendation;
   updateIntakePreview(recommendation);
-  refs.applyRecommendationBtn.dataset.lookId = recommendation.lookId;
-  refs.recommendationState.textContent = recommendation.canApply === false ? "建议重拍" : recommendation.source === "face" ? "融合推荐" : "问询推荐";
-  refs.recommendationTitle.textContent = recommendation.lookName;
-  refs.recommendationReason.textContent = recommendation.reason;
-  refs.recommendationConfidence.textContent = recommendation.confidence == null ? "问卷方向" : `匹配度 ${recommendation.confidence}`;
-  refs.recommendationChips.innerHTML = recommendation.chips.map((chip) => `<span>${chip}</span>`).join("");
-  refs.applyRecommendationBtn.disabled = recommendation.canApply === false;
+  renderRecommendationPanel(recommendationPanelElements(), recommendation);
   updateLookRecommendationMarker(recommendation.lookId);
 }
 
+function recommendationPanelElements() {
+  return {
+    state: refs.recommendationState,
+    title: refs.recommendationTitle,
+    reason: refs.recommendationReason,
+    confidence: refs.recommendationConfidence,
+    chips: refs.recommendationChips,
+    applyButton: refs.applyRecommendationBtn,
+  };
+}
+
 function updateIntakePreview(recommendation) {
-  if (!refs.intakePreviewCard) return;
-
-  if (!recommendation) {
-    refs.intakePreviewState.textContent = "等待选择";
-    refs.intakePreviewTitle.textContent = "等待推荐";
-    refs.intakePreviewReason.textContent = "选择场景、目标和妆感后，会先生成一版不需要摄像头的推荐。";
-    refs.intakePreviewChips.innerHTML = "";
-    refs.intakePreviewSwatches.innerHTML = "";
-    return;
-  }
-
-  const look = looks.find((item) => item.id === recommendation.lookId);
-  refs.intakePreviewState.textContent = recommendation.source === "face" ? "融合推荐" : "问询推荐";
-  refs.intakePreviewTitle.textContent = recommendation.lookName;
-  refs.intakePreviewReason.textContent = recommendation.reason;
-  refs.intakePreviewChips.innerHTML = recommendation.chips.map((chip) => `<span>${chip}</span>`).join("");
-  refs.intakePreviewSwatches.innerHTML = look
-    ? `
-      <span style="background:${look.lip}"></span>
-      <span style="background:${look.blush}"></span>
-      <span style="background:${look.eye}"></span>
-    `
-    : "";
+  const look = recommendation ? looks.find((item) => item.id === recommendation.lookId) : null;
+  renderIntakePreviewPanel(
+    {
+      card: refs.intakePreviewCard,
+      state: refs.intakePreviewState,
+      title: refs.intakePreviewTitle,
+      reason: refs.intakePreviewReason,
+      chips: refs.intakePreviewChips,
+      swatches: refs.intakePreviewSwatches,
+    },
+    recommendation,
+    look
+  );
 }
 
 function updateLookRecommendationMarker(lookId) {
-  document.querySelectorAll(".look-card").forEach((card) => {
-    card.classList.toggle("recommended", card.dataset.lookId === lookId);
-  });
+  renderLookRecommendationMarker(document.querySelectorAll(".look-card"), lookId);
 }
 
 function updatePreferenceState() {
@@ -1048,9 +1053,11 @@ function updatePreferenceState() {
 
 function updatePreferenceSummary() {
   const profile = buildPreferenceProfile();
-  refs.preferenceSummaryChips.innerHTML = [...profile.labels, profile.existingMakeupLabel, ...profile.detailLabels]
-    .map((label) => `<span>${label}</span>`)
-    .join("");
+  renderPreferenceSummaryView(refs.preferenceSummaryChips, [
+    ...profile.labels,
+    profile.existingMakeupLabel,
+    ...profile.detailLabels,
+  ]);
 }
 
 function updateProfileSummary(signals) {
@@ -1060,11 +1067,14 @@ function updateProfileSummary(signals) {
   const budgetText = budgetHint(preferenceState.budget);
 
   if (!signals) {
-    refs.profileState.textContent = "问卷生成";
-    refs.profileSummary.innerHTML = `
-      <span>${profile.labels.join(" / ")}</span>
-      <strong>${intensityText}；${budgetText}。</strong>
-    `;
+    renderProfileSummaryView(
+      { state: refs.profileState, summary: refs.profileSummary },
+      {
+        stateText: "问卷生成",
+        metaText: profile.labels.join(" / "),
+        detailText: `${intensityText}；${budgetText}。`,
+      }
+    );
     return;
   }
 
@@ -1072,11 +1082,14 @@ function updateProfileSummary(signals) {
   const toneText = toneLabel(faceTone.warmth);
   const lightText = lightLabel(faceTone.luminance);
   const fitText = guidance?.summary ?? (quality > 0.72 ? "关键点贴合良好" : quality > 0.48 ? "关键点可用" : "角度偏大，推荐会更保守");
-  refs.profileState.textContent = "脸部融合";
-  refs.profileSummary.innerHTML = `
-    <span>${toneText} / ${lightText} / ${fitText}</span>
-    <strong>${intensityText}；${budgetText}。</strong>
-  `;
+  renderProfileSummaryView(
+    { state: refs.profileState, summary: refs.profileSummary },
+    {
+      stateText: "脸部融合",
+      metaText: `${toneText} / ${lightText} / ${fitText}`,
+      detailText: `${intensityText}；${budgetText}。`,
+    }
+  );
 }
 
 function renderPersonalizationPanels() {
@@ -1110,9 +1123,7 @@ function currentStyleItems() {
 }
 
 function renderStylePlan() {
-  refs.stylePlan.innerHTML = currentStyleItems()
-    .map(([title, body]) => `<article><span>${title}</span><strong>${body}</strong></article>`)
-    .join("");
+  renderStylePlanView(refs.stylePlan, currentStyleItems());
 }
 
 function currentMakeupPlan() {
@@ -1125,23 +1136,7 @@ function currentMakeupPlan() {
 }
 
 function renderMakeupPlanSummary() {
-  const plan = currentMakeupPlan();
-  const previewCount = plan.filter((step) => step.visualPreview).length;
-  refs.makeupPlanSummary.innerHTML = `
-    <div class="makeup-plan-status">
-      <span>${previewCount} 项已预览</span>
-      <small>${plan.length - previewCount} 项方案建议</small>
-    </div>
-    <div class="makeup-step-chips">
-      ${plan
-        .map(
-          (step) =>
-            `<span class="${step.visualPreview ? "is-previewed" : ""}" style="--step-color:${step.color}">${step.category}</span>`
-        )
-        .join("")}
-    </div>
-    <p>${plan.find((step) => step.id === "base")?.guidance ?? ""}</p>
-  `;
+  renderMakeupPlanSummaryView(refs.makeupPlanSummary, currentMakeupPlan());
 }
 
 function currentProducts() {
@@ -1156,21 +1151,10 @@ function currentProducts() {
 
 function renderProductList() {
   const copy = budgetProductCopy[preferenceState.budget] ?? budgetProductCopy.starter;
-  refs.productBudgetLabel.textContent = copy.label;
-  refs.productList.innerHTML = currentProducts()
-    .map(
-      (item) => `
-        <article class="product-card">
-          <span class="product-swatch" style="background:${item.color}"></span>
-          <div>
-            <strong>${item.role}</strong>
-            <p>${item.name}</p>
-            <small>${item.meta}${item.visualPreview ? " / 已预览" : " / 方案建议"}</small>
-          </div>
-        </article>
-      `
-    )
-    .join("");
+  renderProductListView(
+    { budgetLabel: refs.productBudgetLabel, list: refs.productList },
+    { budgetLabel: copy.label, products: currentProducts() }
+  );
 }
 
 function setSampleScenario(sampleId) {
@@ -1182,8 +1166,10 @@ function setSampleScenario(sampleId) {
 
 function renderValidationState() {
   const gate = currentQualityGate();
-  refs.qualityGateLabel.textContent = gate.label;
-  refs.renderVersionLabel.textContent = renderVersion;
+  renderValidationStateView(
+    { qualityGate: refs.qualityGateLabel, renderVersion: refs.renderVersionLabel },
+    { gateLabel: gate.label, renderVersion }
+  );
 }
 
 function selectedValidationScores() {
@@ -1255,27 +1241,16 @@ function saveTestRuns(runs) {
 
 function renderTestRuns() {
   const runs = readTestRuns();
-  refs.testRunCount.textContent = `${runs.length} 条`;
-  if (!runs.length) {
-    refs.testRunList.innerHTML = `<p>上传真实照片后，给样本打标签并记录结果。</p>`;
-    return;
-  }
-
-  refs.testRunList.innerHTML = runs
-    .slice(0, 4)
-    .map(
-      (run) => `
-        <article>
-          <strong>${run.sampleLabel}</strong>
-          <span>${run.lookName} / ${run.source}</span>
-          <small>${testMetricText(run)}</small>
-          ${scoreSummaryText(run.scores) ? `<small>${scoreSummaryText(run.scores)}</small>` : ""}
-          ${issueSummaryText(run.issueTags) ? `<small>${issueSummaryText(run.issueTags)}</small>` : ""}
-          ${run.note ? `<p>${escapeHtml(run.note)}</p>` : ""}
-        </article>
-      `
-    )
-    .join("");
+  renderTestRunList(
+    { count: refs.testRunCount, list: refs.testRunList },
+    {
+      runs,
+      qualityGateLabels,
+      defaultRenderVersion: renderVersion,
+      validationScoreLabels,
+      validationIssueLabels,
+    }
+  );
 }
 
 function setExpertRating(rating) {
@@ -1323,47 +1298,10 @@ function saveExpertReviews(reviews) {
 
 function renderExpertReviews() {
   const reviews = readExpertReviews();
-  refs.expertReviewCount.textContent = `${reviews.length} 条`;
-  if (!reviews.length) {
-    refs.expertReviewList.innerHTML = `<p>专家评审只保存标签、备注和推荐上下文，不保存照片。</p>`;
-    return;
-  }
-
-  refs.expertReviewList.innerHTML = reviews
-    .slice(0, 4)
-    .map(
-      (review) => `
-        <article>
-          <strong>${review.ratingLabel}</strong>
-          <span>${review.sampleLabel} / ${review.lookName}</span>
-          <small>${review.preferenceLabels?.join(" / ") ?? "未记录偏好标签"}</small>
-          ${review.note ? `<p>${escapeHtml(review.note)}</p>` : ""}
-        </article>
-      `
-    )
-    .join("");
-}
-
-function testMetricText(run) {
-  const gate = run.qualityGateLabel ?? qualityGateLabels[run.qualityGate] ?? "未分级";
-  const version = run.renderVersion ?? renderVersion;
-  if (run.quality == null) return `未识别人脸，仅记录问卷推荐 / ${gate} / ${version}`;
-  const light = run.luminance < 34 ? "偏暗" : run.luminance > 78 ? "偏亮" : "稳定";
-  const tone = run.warmth > 18 ? "偏暖" : run.warmth < -8 ? "偏冷" : "中性";
-  return `关键点 ${run.quality}% / 光线${light} / ${tone} / ${gate} / ${version}`;
-}
-
-function scoreSummaryText(scores = {}) {
-  const entries = Object.entries(validationScoreLabels)
-    .filter(([key]) => scores[key] != null && scores[key] !== "")
-    .map(([key, label]) => `${label}${scores[key]}`);
-  return entries.length ? `评分：${entries.join(" / ")}` : "";
-}
-
-function issueSummaryText(issueTags = []) {
-  if (!issueTags.length) return "";
-  const labels = issueTags.map((tag) => validationIssueLabels[tag] ?? tag);
-  return `失败标签：${labels.join(" / ")}`;
+  renderExpertReviewList(
+    { count: refs.expertReviewCount, list: refs.expertReviewList },
+    reviews
+  );
 }
 
 function openResultSheet() {
@@ -1437,9 +1375,9 @@ function renderResultSheet() {
           (run) => `
             <article>
               <strong>${run.sampleLabel}</strong>
-              <span>${run.lookName} / ${testMetricText(run)}</span>
-              ${scoreSummaryText(run.scores) ? `<span>${scoreSummaryText(run.scores)}</span>` : ""}
-              ${issueSummaryText(run.issueTags) ? `<span>${issueSummaryText(run.issueTags)}</span>` : ""}
+              <span>${run.lookName} / ${testMetricText(run, { qualityGateLabels, defaultRenderVersion: renderVersion })}</span>
+              ${scoreSummaryText(run.scores, validationScoreLabels) ? `<span>${scoreSummaryText(run.scores, validationScoreLabels)}</span>` : ""}
+              ${issueSummaryText(run.issueTags, validationIssueLabels) ? `<span>${issueSummaryText(run.issueTags, validationIssueLabels)}</span>` : ""}
             </article>
           `
         )
@@ -1572,42 +1510,14 @@ function resetFriendReviewFields() {
 
 function renderFriendReviewSummary() {
   const reviews = readFriendReviews();
-  refs.friendReviewCount.textContent = `${reviews.length} 条`;
-  if (!reviews.length) {
-    refs.friendReviewSummary.innerHTML = `<p>还没有朋友试玩总结。完成 5 条后，再根据贴合度、自然度和复用意愿决定是否继续迭代。</p>`;
-    return;
-  }
-
-  const groupedReviews = reviews.reduce((groups, review) => {
-    const version = review.renderVersion ?? "render-v5-natural-makeup";
-    groups[version] ??= [];
-    groups[version].push(review);
-    return groups;
-  }, {});
-
-  refs.friendReviewSummary.innerHTML = Object.entries(groupedReviews)
-    .map(([version, versionReviews]) => {
-      const averageScore = (key) => average(versionReviews.map((review) => Number(review[key]) || 0)).toFixed(1);
-      const describeCounts = (key, labels) =>
-        Object.entries(labels)
-          .map(([value, label]) => `${label} ${versionReviews.filter((review) => review[key] === value).length}`)
-          .join(" / ");
-      const notes = versionReviews
-        .filter((review) => review.note)
-        .slice(0, 3)
-        .map((review) => `<small>${escapeHtml(String(review.note))}</small>`)
-        .join("");
-      return `
-        <article>
-          <strong>${version}：${versionReviews.length} 条</strong>
-          <span>推荐贴合度 ${averageScore("fitScore")} / 5；妆效自然度 ${averageScore("naturalnessScore")} / 5</span>
-          <small>隐私：${describeCounts("privacyComfort", friendPrivacyComfortLabels)}</small>
-          <small>复用：${describeCounts("reuseIntent", friendReuseIntentLabels)}</small>
-          ${notes}
-        </article>
-      `;
-    })
-    .join("");
+  renderFriendReviewList(
+    { count: refs.friendReviewCount, summary: refs.friendReviewSummary },
+    reviews,
+    {
+      privacyComfortLabels: friendPrivacyComfortLabels,
+      reuseIntentLabels: friendReuseIntentLabels,
+    }
+  );
 }
 
 function readMakeupStepFeedback() {
@@ -1854,19 +1764,6 @@ function preferenceRecommendationReason(look, preferenceProfile) {
 
 function currentQualityGate() {
   return qualityGateFromSignals(lastProfileSignals);
-}
-
-function escapeHtml(value) {
-  return value.replace(/[&<>"']/g, (char) => {
-    const entities = {
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;",
-    };
-    return entities[char];
-  });
 }
 
 function sampleToneFromIndices(landmarks, mirrored, indices, padding) {
