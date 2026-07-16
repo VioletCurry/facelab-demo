@@ -1,5 +1,37 @@
-import { qualityGateFromSignals, qualityGateLabels, recommendationConfidenceCap } from "./render-policy.mjs";
+import {
+  qualityGateFromSignals,
+  qualityGateLabels,
+  recommendationConfidenceCap,
+} from "./render-policy.mjs?v=7.3-continuous-cheek";
 import { buildCompleteMakeupPlan } from "./makeup-plan.mjs";
+import { createCompatibleFaceLandmarker } from "./browser-runtime.mjs?v=7.3-architecture";
+import {
+  average,
+  clamp,
+  distance,
+  mapRange,
+} from "./render/geometry.mjs?v=7.3-architecture";
+import { neutralTone } from "./render/color.mjs?v=7.3-architecture";
+import { clearStores, createArrayStore, createObjectStore } from "./persistence.mjs?v=7.3-architecture";
+import { releaseConfig } from "./release-config.mjs?v=7.3-architecture";
+import { createMakeupRenderer, makeupSideVisibility } from "./makeup-renderer.mjs?v=7.3-architecture";
+import {
+  PREFERENCE_PRESETS as preferencePresets,
+  budgetHint as budgetHintPure,
+  buildPreferenceProfile as buildPreferenceProfilePure,
+  guidanceForFace as guidanceForFacePure,
+  lightLabel as lightLabelPure,
+  preferenceRecommendationReason as preferenceRecommendationReasonPure,
+  rankLooksByPreference,
+  recommendFromFaceSignals,
+  recommendFromPreferences as recommendFromPreferencesPure,
+  toneLabel as toneLabelPure,
+} from "./recommendation-engine.mjs?v=7.3-architecture";
+
+const guidanceForFace = guidanceForFacePure;
+const lightLabel = lightLabelPure;
+const toneLabel = toneLabelPure;
+const budgetHint = budgetHintPure;
 
 const modelUrl =
   "./models/face_landmarker.task";
@@ -9,6 +41,12 @@ const makeupStepFeedbackStorageKey = "facestyle-ai-mvp-makeup-step-feedback";
 const testRunStorageKey = "facestyle-ai-mvp-test-runs";
 const expertReviewStorageKey = "facestyle-ai-mvp-expert-reviews";
 const friendReviewStorageKey = "facestyle-ai-mvp-friend-reviews";
+const preferenceStore = createObjectStore(storageKey);
+const feedbackStore = createArrayStore(feedbackStorageKey, { limit: 50 });
+const makeupStepFeedbackStore = createArrayStore(makeupStepFeedbackStorageKey, { limit: 100 });
+const testRunStore = createArrayStore(testRunStorageKey, { limit: 50 });
+const expertReviewStore = createArrayStore(expertReviewStorageKey, { limit: 50 });
+const friendReviewStore = createArrayStore(friendReviewStorageKey, { limit: 50 });
 const makeupStepFeedbackPreferenceKeys = [
   "occasion",
   "goal",
@@ -51,12 +89,19 @@ const friendReuseIntentLabels = {
   no: "不愿再用",
 };
 
-const renderVersion = "render-v5-natural-makeup";
+const developerMode = releaseConfig.developerTools;
+const lipTextureExperimentEnabled = releaseConfig.lipTextureExperiment;
+const blushPlacementExperimentEnabled = releaseConfig.blushPlacementExperiment;
+const renderVersion = releaseConfig.renderVersion;
 
 const validationScoreLabels = {
   landmarkStability: "关键点",
   lipEdge: "唇线",
-  blushPlacement: "腮红",
+  lipTexture: "唇部质地",
+  lipNaturalness: "唇部自然度",
+  blushPlacement: "腮红位置",
+  blushColor: "腮红颜色",
+  blushNaturalness: "腮红自然度",
   eyeshadowAlignment: "眼影",
   colorVisibility: "显色",
   recommendationTaste: "审美",
@@ -65,9 +110,20 @@ const validationScoreLabels = {
 
 const validationIssueLabels = {
   lip_edge_overdraw: "唇线外溢",
+  lip_edge_underfill: "唇线欠填",
   lip_too_strong: "口红过重",
+  lip_texture_mismatch: "唇部质地不符",
+  lip_mouth_spill: "嘴腔染色",
+  lip_teeth_spill: "牙齿染色",
+  lip_highlight_drift: "高光漂移",
+  lip_texture_flicker: "质地闪烁",
   blush_not_visible: "腮红不可见",
   blush_too_high: "腮红过高",
+  blush_too_low: "腮红过低",
+  blush_too_inner: "腮红过内",
+  blush_too_outer: "腮红过外",
+  blush_color_mismatch: "腮红色号不合适",
+  blush_asymmetry: "腮红左右不一致",
   eyeshadow_not_visible: "眼影不可见",
   eyeshadow_drift: "眼影漂移",
   color_not_visible: "颜色不可见",
@@ -293,59 +349,6 @@ const looks = [
   },
 ];
 
-const preferencePresets = {
-  occasion: {
-    daily: { label: "通勤", intensity: 0.38, warmth: 0.08, clarity: 0.82, light: 0.54, moods: ["clean", "sharp"] },
-    date: { label: "约会", intensity: 0.48, warmth: 0.12, clarity: 0.58, light: 0.58, moods: ["rose", "fresh"] },
-    interview: { label: "面试", intensity: 0.34, warmth: -0.04, clarity: 0.92, light: 0.5, moods: ["sharp", "clean"] },
-    photo: { label: "拍照", intensity: 0.56, warmth: 0.18, clarity: 0.66, light: 0.62, moods: ["fresh", "bold"] },
-  },
-  goal: {
-    fresh: { label: "提气色", intensity: 0.48, warmth: 0.24, clarity: 0.6, light: 0.62, moods: ["fresh", "rose"] },
-    bright: { label: "显白", intensity: 0.42, warmth: -0.12, clarity: 0.76, light: 0.56, moods: ["rose", "sharp"] },
-    lowkey: { label: "低调", intensity: 0.28, warmth: 0.06, clarity: 0.76, light: 0.5, moods: ["clean", "sharp"] },
-    presence: { label: "气场", intensity: 0.62, warmth: 0.02, clarity: 0.88, light: 0.46, moods: ["bold", "sharp"] },
-  },
-  finish: {
-    natural: { label: "清透", intensity: 0.3, warmth: 0.08, clarity: 0.68, light: 0.58, moods: ["clean", "fresh"] },
-    mist: { label: "柔雾", intensity: 0.4, warmth: -0.02, clarity: 0.72, light: 0.5, moods: ["rose", "sharp"] },
-    glow: { label: "水光", intensity: 0.34, warmth: 0.18, clarity: 0.56, light: 0.66, moods: ["clean", "fresh"] },
-    bold: { label: "显色", intensity: 0.62, warmth: 0.08, clarity: 0.82, light: 0.48, moods: ["bold", "sharp"] },
-  },
-  budget: {
-    starter: { label: "平价", intensity: 0.38, warmth: 0.1, clarity: 0.68, light: 0.56, moods: ["fresh", "clean"] },
-    balanced: { label: "均衡", intensity: 0.44, warmth: 0.08, clarity: 0.7, light: 0.54, moods: ["clean", "rose"] },
-    premium: { label: "进阶", intensity: 0.54, warmth: 0.02, clarity: 0.82, light: 0.5, moods: ["sharp", "bold"] },
-    sensitive: { label: "敏感肌", intensity: 0.3, warmth: 0.06, clarity: 0.76, light: 0.58, moods: ["clean", "fresh"] },
-  },
-  existingMakeup: {
-    bare: { label: "素颜", visibilityFloor: 0.4 },
-    light: { label: "淡妆", visibilityFloor: 0.46 },
-    visible: { label: "明显妆容", visibilityFloor: 0.53 },
-  },
-  baseCoverage: {
-    sheer: { label: "底妆轻薄", intensity: 0.3, warmth: 0.04, clarity: 0.64, light: 0.62, moods: ["clean", "fresh"] },
-    natural: { label: "底妆自然", intensity: 0.42, warmth: 0.06, clarity: 0.72, light: 0.56, moods: ["clean", "rose"] },
-    medium: { label: "底妆中等", intensity: 0.54, warmth: 0.04, clarity: 0.8, light: 0.5, moods: ["sharp", "bold"] },
-  },
-  browStyle: {
-    natural: { label: "眉妆原生", intensity: 0.34, warmth: 0.04, clarity: 0.64, light: 0.58, moods: ["clean", "fresh"] },
-    defined: { label: "眉妆清晰", intensity: 0.46, warmth: 0.02, clarity: 0.84, light: 0.52, moods: ["rose", "sharp"] },
-    sharp: { label: "眉妆利落", intensity: 0.54, warmth: -0.04, clarity: 0.92, light: 0.48, moods: ["sharp", "bold"] },
-  },
-  eyeFocus: {
-    natural: { label: "眼妆自然", intensity: 0.32, warmth: 0.06, clarity: 0.64, light: 0.58, moods: ["clean", "rose"] },
-    bright: { label: "眼妆放大", intensity: 0.48, warmth: 0.06, clarity: 0.78, light: 0.56, moods: ["fresh", "rose"] },
-    lifted: { label: "眼妆提拉", intensity: 0.5, warmth: -0.02, clarity: 0.9, light: 0.5, moods: ["sharp", "bold"] },
-  },
-  lipTexture: {
-    stain: { label: "唇部染唇", intensity: 0.36, warmth: 0.1, clarity: 0.68, light: 0.58, moods: ["clean", "fresh"] },
-    satin: { label: "唇部缎光", intensity: 0.46, warmth: 0.08, clarity: 0.74, light: 0.54, moods: ["rose", "sharp"] },
-    mist: { label: "唇部柔雾", intensity: 0.44, warmth: 0.02, clarity: 0.78, light: 0.5, moods: ["rose", "sharp"] },
-    glow: { label: "唇部水光", intensity: 0.4, warmth: 0.16, clarity: 0.62, light: 0.64, moods: ["fresh", "clean"] },
-  },
-};
-
 const refs = {
   appShell: document.querySelector("#appShell"),
   intakeScreen: document.querySelector("#intakeScreen"),
@@ -442,8 +445,7 @@ const refs = {
 };
 
 const ctx = refs.canvas.getContext("2d", { alpha: false });
-const makeupLayer = document.createElement("canvas");
-const makeupLayerCtx = makeupLayer.getContext("2d");
+const makeupRenderer = createMakeupRenderer({ ctx, canvas: refs.canvas });
 
 let faceLandmarker;
 let FaceLandmarkerClass;
@@ -480,20 +482,6 @@ let preferenceState = {
   eyeFocus: "natural",
   lipTexture: "stain",
 };
-
-const lipOuter = [
-  61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37,
-  39, 40, 185,
-];
-const lipInner = [
-  78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308, 415, 310, 311, 312, 13, 82,
-  81, 80, 191,
-];
-const upperLipOuter = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291];
-const upperLipInner = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308];
-const lowerLipOuter = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291];
-const lowerLipInner = [78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308];
-const developerMode = false; // Friends release: developer tools are build-time disabled.
 
 document.body.classList.toggle("developer-mode", developerMode);
 
@@ -537,7 +525,15 @@ async function init() {
     const filesetResolver = await FilesetResolverClass.forVisionTasks(
       "./node_modules/@mediapipe/tasks-vision/wasm"
     );
-    const compatibleRuntime = await createCompatibleFaceLandmarker(filesetResolver);
+    const compatibleRuntime = await createCompatibleFaceLandmarker({
+      FaceLandmarker: FaceLandmarkerClass,
+      filesetResolver,
+      modelAssetPath: modelUrl,
+      onDelegate(delegate) {
+        refs.runtimeLabel.textContent =
+          delegate === "CPU" ? "兼容模式加载中" : "MediaPipe 加载中";
+      },
+    });
     faceLandmarker = compatibleRuntime.landmarker;
     modelState = "ready";
     window.clearTimeout(modelLoadNoticeTimer);
@@ -561,46 +557,6 @@ async function init() {
       "模型加载失败。请用 Safari 打开此页面并刷新；如果仍失败，请稍后重试。"
     );
   }
-}
-
-function isIosDevice() {
-  return (
-    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
-  );
-}
-
-function isEmbeddedIosBrowser() {
-  if (!isIosDevice()) return false;
-  return !/Version\/[\d.]+.*Safari/.test(navigator.userAgent);
-}
-
-async function createCompatibleFaceLandmarker(filesetResolver) {
-  const delegates = isEmbeddedIosBrowser() ? ["CPU", "GPU"] : ["GPU", "CPU"];
-  let lastError;
-
-  for (const delegate of delegates) {
-    try {
-      refs.runtimeLabel.textContent =
-        delegate === "CPU" ? "兼容模式加载中" : "MediaPipe 加载中";
-      const landmarker = await FaceLandmarkerClass.createFromOptions(filesetResolver, {
-        baseOptions: {
-          modelAssetPath: modelUrl,
-          delegate,
-        },
-        outputFaceBlendshapes: true,
-        outputFacialTransformationMatrixes: true,
-        runningMode: "VIDEO",
-        numFaces: 1,
-      });
-      return { landmarker, delegate };
-    } catch (error) {
-      console.warn(`MediaPipe ${delegate} delegate failed`, error);
-      lastError = error;
-    }
-  }
-
-  throw lastError || new Error("MediaPipe could not be initialized");
 }
 
 function renderLooks() {
@@ -842,6 +798,7 @@ async function handlePhotoUpload(event) {
 }
 
 async function processPhotoFile(file) {
+
   const objectUrl = URL.createObjectURL(file);
   try {
     await loadPhotoSource(objectUrl);
@@ -999,6 +956,8 @@ function drawMakeup(results, mirrored) {
       lipIntensity: activeLook.lipIntensity,
       blushIntensity: activeLook.blushIntensity,
       eyeIntensity: activeLook.eyeIntensity,
+      lipTexture: preferenceState.lipTexture,
+      lipTextureExperiment: lipTextureExperimentEnabled,
     },
   };
   lastRenderDiagnostics = renderDiagnostics;
@@ -1025,274 +984,17 @@ function drawMakeup(results, mirrored) {
   const makeupOpacity = clamp(mapRange(quality, 0.28, 0.72, 0.74, 1), 0.72, 1) * realtimeMakeupMultiplier(pose);
   renderDiagnostics.parameters.makeupOpacity = Number(makeupOpacity.toFixed(3));
   renderDiagnostics.parameters.landmarkMotion = Number(lastLandmarkMotion.toFixed(4));
-  drawEyeShadow(landmarks, mirrored, makeupOpacity, pose, renderDiagnostics);
-  drawBlush(landmarks, mirrored, makeupOpacity, pose, renderDiagnostics);
-  drawLips(landmarks, mirrored, makeupOpacity, pose, renderDiagnostics);
-}
-
-function drawLips(landmarks, mirrored, qualityOpacity, pose, diagnostics) {
-  const mouthOpen = pose.mouthOpen ?? 0;
-  const yaw = pose.yaw ?? 0;
-  const lipDiagnostic = {
-    status: "rendered",
-    partial: false,
-    reason: "",
-    mouthOpen: Number(mouthOpen.toFixed(3)),
-    yaw: Number(yaw.toFixed(3)),
-  };
-  if (diagnostics) diagnostics.lip = lipDiagnostic;
-  const upperOuter = upperLipOuter.map((index) => point(landmarks[index], mirrored));
-  const upperInner = upperLipInner.map((index) => point(landmarks[index], mirrored)).reverse();
-  const lowerOuter = lowerLipOuter.map((index) => point(landmarks[index], mirrored));
-  const lowerInner = lowerLipInner.map((index) => point(landmarks[index], mirrored)).reverse();
-  const allOuter = lipOuter.map((index) => point(landmarks[index], mirrored));
-  const innerMouth = lipInner.map((index) => point(landmarks[index], mirrored));
-  const upperPath = [...upperOuter, ...upperInner];
-  const lowerPath = [...lowerOuter, ...lowerInner];
-  const mouthWidth = Math.max(1, distance(point(landmarks[61], mirrored), point(landmarks[291], mirrored)));
-  const faceWidth = Math.max(1, distance(point(landmarks[234], mirrored), point(landmarks[454], mirrored)));
-  const mouthRatio = mouthWidth / faceWidth;
-  if (mouthOpen > 0.28 || yaw > 0.44 || mouthRatio < 0.08) {
-    lipDiagnostic.status = "skipped";
-    lipDiagnostic.reason = mouthOpen > 0.28 ? "mouth-unreliable" : yaw > 0.44 ? "profile-unreliable" : "lip-landmarks-uncertain";
-    return;
-  }
-  lipDiagnostic.partial = mouthOpen > 0.1 || yaw > 0.12;
-  if (lipDiagnostic.partial) lipDiagnostic.reason = mouthOpen > 0.1 ? "partial-mouth-safe" : "partial-yaw-safe";
-  const lipTone = sampleToneFromPoints([...allOuter, ...innerMouth], Math.max(4, mouthWidth * 0.025));
-  const mouthComfort = clamp(mapRange(mouthOpen, 0.06, 0.24, 1, 0.72), 0.72, 1);
-  const poseComfort = clamp(mapRange(yaw, 0.1, 0.44, 1, 0.62), 0.62, 1);
-  const opacity =
-    activeLook.lipIntensity *
-    qualityOpacity *
-    makeupVisibilityMultiplier(lipTone) *
-    mouthComfort *
-    poseComfort *
-    (mode === "camera" ? 0.86 : 0.98);
-  const edgeBlur = clamp(mouthWidth * 0.012, 0.8, 3.8);
-  const eraseBlur = clamp(mouthWidth * mapRange(mouthOpen, 0.02, 0.12, 0.012, 0.032), 1.2, 5.6);
-  const lipRgb = adaptMakeupColor(activeLook.lip, lipTone, { mix: 0.04, lightBoost: 0.98, minimumContrast: 0.22 });
-  const lipSoftRgb = adaptMakeupColor(activeLook.lip, lipTone, { mix: 0.1, lightBoost: 1.08, minimumContrast: 0.16 });
-  const highlightRgb = mixRgb(lipSoftRgb, { r: 255, g: 236, b: 226 }, 0.32);
-
-  drawFeatheredFill({
-    paths: [upperPath, lowerPath],
-    erasePaths: [innerMouth],
-    color: rgbaFromRgb(lipSoftRgb, opacity * 0.64),
-    blur: edgeBlur * 1.3,
-    eraseBlur,
-    composite: "source-over",
+  makeupRenderer.renderMakeupLayers({
+    landmarks,
+    mirrored,
+    qualityOpacity: makeupOpacity,
+    pose,
+    diagnostics: renderDiagnostics,
+    look: activeLook,
+    preferences: preferenceState,
+    mode,
+    flags: { lipTextureExperimentEnabled, blushPlacementExperimentEnabled },
   });
-
-  drawFeatheredFill({
-    paths: [upperPath, lowerPath],
-    erasePaths: [innerMouth],
-    color: rgbaFromRgb(lipRgb, opacity * 0.54),
-    blur: edgeBlur,
-    eraseBlur,
-    composite: "multiply",
-  });
-
-  ctx.save();
-  ctx.globalCompositeOperation = "source-over";
-  ctx.strokeStyle = rgbaFromRgb(highlightRgb, opacity * 0.17);
-  ctx.lineWidth = clamp(mouthWidth * 0.018, 1.1, 3.2);
-  ctx.filter = "blur(0.55px)";
-  drawClosedPath(allOuter);
-  ctx.stroke();
-  drawOpenPath(lowerLipInner.slice(2, 9).map((index) => point(landmarks[index], mirrored)));
-  ctx.stroke();
-  ctx.restore();
-}
-
-function drawBlush(landmarks, mirrored, qualityOpacity, pose, diagnostics) {
-  const leftOuter = point(landmarks[234], mirrored);
-  const rightOuter = point(landmarks[454], mirrored);
-  const leftAnchor = point(landmarks[187] ?? landmarks[234], mirrored);
-  const rightAnchor = point(landmarks[411] ?? landmarks[454], mirrored);
-  const leftReference = point(landmarks[50] ?? landmarks[187] ?? landmarks[234], mirrored);
-  const rightReference = point(landmarks[280] ?? landmarks[411] ?? landmarks[454], mirrored);
-  const nose = point(landmarks[1] ?? landmarks[4], mirrored);
-  const faceWidth = distance(leftOuter, rightOuter);
-  const leftEye = point(landmarks[33], mirrored);
-  const rightEye = point(landmarks[263], mirrored);
-  const left = movePoint(mixPoints(leftAnchor, leftReference, 0.28), { x: 0, y: -faceWidth * 0.012 });
-  const right = movePoint(mixPoints(rightAnchor, rightReference, 0.28), { x: 0, y: -faceWidth * 0.012 });
-  const leftRadiusX = clamp(distance(left, nose) * 0.58, faceWidth * 0.095, faceWidth * 0.14);
-  const rightRadiusX = clamp(distance(right, nose) * 0.58, faceWidth * 0.095, faceWidth * 0.14);
-  const leftRadiusY = clamp(Math.abs(left.y - leftEye.y) * 0.56, faceWidth * 0.06, faceWidth * 0.092);
-  const rightRadiusY = clamp(Math.abs(right.y - rightEye.y) * 0.56, faceWidth * 0.06, faceWidth * 0.092);
-  const leftTone = sampleToneFromPoints([left, leftReference], leftRadiusX * 0.42);
-  const rightTone = sampleToneFromPoints([right, rightReference], rightRadiusX * 0.42);
-  const sharedBlushTone = {
-    r: average([leftTone.r, rightTone.r]),
-    g: average([leftTone.g, rightTone.g]),
-    b: average([leftTone.b, rightTone.b]),
-    luminance: average([leftTone.luminance, rightTone.luminance]),
-    warmth: average([leftTone.warmth, rightTone.warmth]),
-  };
-  const blushColor = adaptMakeupColor(activeLook.blush, sharedBlushTone, {
-    mix: 0.1,
-    lightBoost: 1.08,
-    minimumContrast: 0.18,
-  });
-  const leftAngle = angleBetween(leftOuter, left);
-  const rightAngle = angleBetween(rightOuter, right);
-  const sides = makeupSideVisibility(pose);
-  const leftReliability = assessCheekReliability(left, leftRadiusX, leftRadiusY, leftAngle);
-  const rightReliability = assessCheekReliability(right, rightRadiusX, rightRadiusY, rightAngle);
-  if ((pose.yaw ?? 0) > 0.34) {
-    leftReliability.reliable = false;
-    rightReliability.reliable = false;
-    leftReliability.reason = "profile-cheek-uncertain";
-    rightReliability.reason = "profile-cheek-uncertain";
-  }
-  const blushDiagnostic = {
-    mode: sides.mode,
-    left: {
-      ...leftReliability,
-      rendered: false,
-      toneLuminance: Number((leftTone.luminance ?? 0.56).toFixed(3)),
-      blendMode: (sharedBlushTone.luminance ?? 0.56) < 0.3 ? "shadow-preserving" : "source-over",
-    },
-    right: {
-      ...rightReliability,
-      rendered: false,
-      toneLuminance: Number((rightTone.luminance ?? 0.56).toFixed(3)),
-      blendMode: (sharedBlushTone.luminance ?? 0.56) < 0.3 ? "shadow-preserving" : "source-over",
-    },
-  };
-  if (diagnostics) diagnostics.blush = blushDiagnostic;
-
-  ctx.save();
-  const blushBoost = mode === "camera" ? 1.05 : 1.42;
-  const drawOneBlush = (center, radiusX, radiusY, angle, color, intensity, tone) => {
-    if ((tone?.luminance ?? 0.56) < 0.3) {
-      ctx.globalCompositeOperation = "soft-light";
-      drawBlushCloud(center.x, center.y, radiusX, radiusY, angle, color, intensity * 1.12);
-      ctx.globalCompositeOperation = "source-over";
-      drawBlushCloud(center.x, center.y, radiusX, radiusY, angle, color, intensity * 0.2);
-      return;
-    }
-    ctx.globalCompositeOperation = "source-over";
-    drawBlushCloud(center.x, center.y, radiusX, radiusY, angle, color, intensity);
-  };
-  if (sides.left && leftReliability.reliable) {
-    drawOneBlush(
-      left,
-      leftRadiusX,
-      leftRadiusY,
-      leftAngle,
-      blushColor,
-      clamp(
-        activeLook.blushIntensity * qualityOpacity * makeupVisibilityMultiplier(sharedBlushTone) * blushBoost * sides.leftOpacity,
-        0,
-        1
-      ),
-      sharedBlushTone
-    );
-    blushDiagnostic.left.rendered = true;
-  } else if (!sides.left) {
-    blushDiagnostic.left.reason = "profile-far-side-hidden";
-  } else {
-    blushDiagnostic.left.reason = leftReliability.reason || "occlusion-uncertain";
-  }
-  if (sides.right && rightReliability.reliable) {
-    drawOneBlush(
-      right,
-      rightRadiusX,
-      rightRadiusY,
-      rightAngle,
-      blushColor,
-      clamp(
-        activeLook.blushIntensity * qualityOpacity * makeupVisibilityMultiplier(sharedBlushTone) * blushBoost * sides.rightOpacity,
-        0,
-        1
-      ),
-      sharedBlushTone
-    );
-    blushDiagnostic.right.rendered = true;
-  } else if (!sides.right) {
-    blushDiagnostic.right.reason = "profile-far-side-hidden";
-  } else {
-    blushDiagnostic.right.reason = rightReliability.reason || "occlusion-uncertain";
-  }
-  ctx.restore();
-}
-
-function drawEyeShadow(landmarks, mirrored, qualityOpacity, pose, diagnostics) {
-  const faceWidth = distance(point(landmarks[234], mirrored), point(landmarks[454], mirrored));
-  const lift = clamp(faceWidth * 0.028, 4, 14);
-  const blur = clamp(faceWidth * 0.014, 1.5, 5.5);
-  const leftPath = eyeLidShadowPath([33, 246, 161, 160, 159, 158, 157, 173, 133], landmarks, mirrored, lift);
-  const rightPath = eyeLidShadowPath([263, 466, 388, 387, 386, 385, 384, 398, 362], landmarks, mirrored, lift);
-  const leftTone = sampleToneFromPoints(leftPath, lift * 1.2);
-  const rightTone = sampleToneFromPoints(rightPath, lift * 1.2);
-  const warmSafe = (diagnostics?.faceTone?.warmth ?? 0) > 0.08 && (activeLook.profile?.warmth ?? 0) >= -0.08;
-  const leftColor = adaptEyeShadowColor(activeLook.eye, leftTone, warmSafe);
-  const rightColor = adaptEyeShadowColor(activeLook.eye, rightTone, warmSafe);
-  const sides = makeupSideVisibility(pose);
-  const eyeDiagnostic = {
-    mode: sides.mode,
-    warmSafe,
-    left: { rendered: false, color: leftColor, luminance: Number((leftTone.luminance ?? 0.56).toFixed(3)) },
-    right: { rendered: false, color: rightColor, luminance: Number((rightTone.luminance ?? 0.56).toFixed(3)) },
-  };
-  if (diagnostics) diagnostics.eyeshadow = eyeDiagnostic;
-
-  const drawOneEye = (path, tone, color, sideOpacity) => {
-    const darkSceneFactor = clamp(mapRange(tone?.luminance ?? 0.56, 0.08, 0.28, 0.52, 1), 0.52, 1);
-    const eyeBoost = mode === "camera" ? 1.12 : 1.5;
-    const opacity = clamp(activeLook.eyeIntensity * qualityOpacity * makeupVisibilityMultiplier(tone) * eyeBoost * sideOpacity * darkSceneFactor, 0, 1);
-    drawFeatheredFill({
-      paths: [path],
-      color: rgbaFromRgb(color, opacity * 0.58),
-      blur,
-      composite: "source-over",
-    });
-    drawFeatheredFill({
-      paths: [path],
-      color: rgbaFromRgb(color, opacity * ((tone?.luminance ?? 0.56) < 0.28 ? 0.2 : 0.36)),
-      blur: blur * 0.74,
-      composite: "multiply",
-    });
-  };
-
-  if (sides.left) {
-    drawOneEye(leftPath, leftTone, leftColor, sides.leftOpacity);
-    eyeDiagnostic.left.rendered = true;
-  } else {
-    eyeDiagnostic.left.reason = "profile-far-side-hidden";
-  }
-  if (sides.right) {
-    drawOneEye(rightPath, rightTone, rightColor, sides.rightOpacity);
-    eyeDiagnostic.right.rendered = true;
-  } else {
-    eyeDiagnostic.right.reason = "profile-far-side-hidden";
-  }
-}
-
-function makeupSideVisibility(pose = {}) {
-  const yaw = pose.yaw ?? 0;
-  const visibleSide = pose.visibleSide === "right" ? "right" : "left";
-  if (yaw > 0.32) {
-    return {
-      mode: "profile-visible-side-only",
-      left: visibleSide === "left",
-      right: visibleSide === "right",
-      leftOpacity: visibleSide === "left" ? 1 : 0,
-      rightOpacity: visibleSide === "right" ? 1 : 0,
-    };
-  }
-
-  const farSideOpacity = clamp(mapRange(yaw, 0.08, 0.32, 1, 0.62), 0.62, 1);
-  return {
-    mode: yaw > 0.08 ? "mild-yaw-bilateral" : "bilateral",
-    left: true,
-    right: true,
-    leftOpacity: visibleSide === "left" ? 1 : Number(farSideOpacity.toFixed(3)),
-    rightOpacity: visibleSide === "right" ? 1 : Number(farSideOpacity.toFixed(3)),
-  };
 }
 
 function smoothLandmarks(rawLandmarks) {
@@ -1384,75 +1086,21 @@ function recommendLook(landmarks, mirrored, quality, faceTone, pose = measureFac
   const leftCheek = point(landmarks[234], mirrored);
   const rightCheek = point(landmarks[454], mirrored);
   const faceWidth = Math.max(1, distance(leftCheek, rightCheek));
-  const mouthOpen = pose.mouthOpen;
-  const luminance = faceTone?.luminance ?? 0.56;
-  const warmth = clamp(faceTone?.warmth ?? 0.12, -0.35, 0.45);
-  const desiredIntensity = clamp(
-    (quality < 0.5 ? 0.34 : 0.44) +
-      (luminance > 0.78 ? 0.05 : 0) +
-      (preferenceProfile.visibilityFloor - 0.4) -
-      clamp(mouthOpen, 0, 0.18) * 0.18,
-    0.32,
-    0.68
-  );
-  const desiredWarmth = clamp(warmth * 1.15, -0.26, 0.38);
-  const desiredLight = clamp(luminance, 0.34, 0.76);
-  const desiredClarity = clamp(quality < 0.52 ? 0.86 : 0.6 + mapRange(faceWidth, 120, 420, 0.08, -0.08), 0.48, 0.92);
-
-  const scored = looks
-    .map((look) => {
-      const profile = look.profile;
-      const faceScore =
-        similarity(profile.intensity, desiredIntensity, 0.42) * 0.32 +
-        similarity(profile.warmth, desiredWarmth, 0.62) * 0.24 +
-        similarity(profile.light, desiredLight, 0.5) * 0.2 +
-        similarity(profile.clarity, desiredClarity, 0.5) * 0.24;
-      const intentScore = preferenceScore(look, preferenceProfile);
-      let score = faceScore * 0.58 + intentScore * 0.42;
-
-      if (quality < 0.48 && profile.intensity > 0.5) score -= 0.12;
-      if (luminance > 0.78 && profile.intensity < 0.34) score -= 0.07;
-      if (mouthOpen > 0.1 && look.lipIntensity > 0.68) score -= 0.08;
-      if (preferenceProfile.existingMakeup === "visible" && profile.intensity < 0.42) score -= 0.12;
-      if (warmth > 0.2 && profile.warmth > 0.2) score += 0.04;
-      if (warmth < -0.08 && profile.warmth < -0.08) score += 0.04;
-
-      return { look, score: clamp(score, 0, 1) };
-    })
-    .sort((a, b) => b.score - a.score);
-
-  const best = scored[0];
   const gate = qualityGateFromSignals({ quality, faceTone, pose });
-  const confidence = Math.round(mapRange(best.score, 0.42, 0.92, 62, 96));
-  const signals = { quality, luminance, warmth, mouthOpen, desiredIntensity, pose, gate };
-  const chips = recommendationChips(signals, preferenceProfile);
-  return {
-    lookId: best.look.id,
-    lookName: best.look.name,
-    confidence: clamp(Math.min(confidence, recommendationConfidenceCap(gate.id)), 0, 98),
-    canApply: gate.id === "good_for_tryon" || gate.id === "usable_but_unstable",
-    caveat: gate.id === "good_for_tryon" ? "" : gate.label,
-    chips,
-    source: "face",
-    reason: recommendationReason(best.look, signals, preferenceProfile),
-  };
+  return recommendFromFaceSignals({
+    looks,
+    preferenceProfile,
+    quality,
+    faceTone,
+    pose,
+    faceWidth,
+    gate,
+    confidenceCap: recommendationConfidenceCap(gate.id),
+  });
 }
 
 function recommendFromPreferences() {
-  const preferenceProfile = buildPreferenceProfile();
-  const scored = looks
-    .map((look) => ({ look, score: preferenceScore(look, preferenceProfile) }))
-    .sort((a, b) => b.score - a.score);
-  const best = scored[0];
-  return {
-    lookId: best.look.id,
-    lookName: best.look.name,
-    confidence: null,
-    canApply: true,
-    chips: preferenceChips(preferenceProfile),
-    source: "preference",
-    reason: preferenceRecommendationReason(best.look, preferenceProfile),
-  };
+  return recommendFromPreferencesPure({ looks, preferenceProfile: buildPreferenceProfile() });
 }
 
 function updateRecommendationUI(recommendation) {
@@ -1726,21 +1374,11 @@ function recordCurrentTestRun() {
 }
 
 function readTestRuns() {
-  try {
-    const runs = JSON.parse(localStorage.getItem(testRunStorageKey) || "[]");
-    return Array.isArray(runs) ? runs : [];
-  } catch (error) {
-    console.warn("Unable to read test runs", error);
-    return [];
-  }
+  return testRunStore.read();
 }
 
 function saveTestRuns(runs) {
-  try {
-    localStorage.setItem(testRunStorageKey, JSON.stringify(runs));
-  } catch (error) {
-    console.warn("Unable to save test runs", error);
-  }
+  testRunStore.write(runs);
 }
 
 function renderTestRuns() {
@@ -1789,6 +1427,7 @@ function recordExpertReview() {
     lookName: activeLook.name,
     recommendationSource: activeRecommendation?.source ?? "preference",
     recommendationConfidence: activeRecommendation?.confidence ?? null,
+    renderVersion,
     preferences: { ...preferenceState },
     preferenceLabels: profile.labels,
     signals: feedbackSignals(),
@@ -1803,21 +1442,11 @@ function recordExpertReview() {
 }
 
 function readExpertReviews() {
-  try {
-    const reviews = JSON.parse(localStorage.getItem(expertReviewStorageKey) || "[]");
-    return Array.isArray(reviews) ? reviews : [];
-  } catch (error) {
-    console.warn("Unable to read expert reviews", error);
-    return [];
-  }
+  return expertReviewStore.read();
 }
 
 function saveExpertReviews(reviews) {
-  try {
-    localStorage.setItem(expertReviewStorageKey, JSON.stringify(reviews));
-  } catch (error) {
-    console.warn("Unable to save expert reviews", error);
-  }
+  expertReviewStore.write(reviews);
 }
 
 function renderExpertReviews() {
@@ -1996,35 +1625,26 @@ function handleFeedback(type) {
 }
 
 function recordFeedback(type) {
-  try {
-    const history = readFeedbackHistory();
-    history.push({
-      type,
-      label: feedbackLabel(type),
-      note: refs.feedbackNoteInput.value.trim(),
-      lookId: activeLook.id,
-      lookName: activeLook.name,
-      recommendationSource: activeRecommendation?.source ?? "preference",
-      recommendationConfidence: activeRecommendation?.confidence ?? null,
-      preferences: { ...preferenceState },
-      signals: feedbackSignals(),
-      at: new Date().toISOString(),
-    });
-    localStorage.setItem(feedbackStorageKey, JSON.stringify(history.slice(-50)));
-    refs.feedbackNoteInput.value = "";
-  } catch (error) {
-    console.warn("Unable to save feedback", error);
-  }
+  const history = readFeedbackHistory();
+  history.push({
+    type,
+    label: feedbackLabel(type),
+    note: refs.feedbackNoteInput.value.trim(),
+    lookId: activeLook.id,
+    lookName: activeLook.name,
+    recommendationSource: activeRecommendation?.source ?? "preference",
+    recommendationConfidence: activeRecommendation?.confidence ?? null,
+    renderVersion,
+    preferences: { ...preferenceState },
+    signals: feedbackSignals(),
+    at: new Date().toISOString(),
+  });
+  feedbackStore.write(history);
+  refs.feedbackNoteInput.value = "";
 }
 
 function readFeedbackHistory() {
-  try {
-    const history = JSON.parse(localStorage.getItem(feedbackStorageKey) || "[]");
-    return Array.isArray(history) ? history : [];
-  } catch (error) {
-    console.warn("Unable to read feedback", error);
-    return [];
-  }
+  return feedbackStore.read();
 }
 
 function recordFriendReview() {
@@ -2051,6 +1671,7 @@ function recordFriendReview() {
     lookName: activeLook.name,
     recommendationSource: activeRecommendation?.source ?? "preference",
     recommendationConfidence: activeRecommendation?.confidence ?? null,
+    renderVersion,
     preferences: { ...preferenceState },
     signals: feedbackSignals(),
     at: new Date().toISOString(),
@@ -2062,21 +1683,11 @@ function recordFriendReview() {
 }
 
 function readFriendReviews() {
-  try {
-    const reviews = JSON.parse(localStorage.getItem(friendReviewStorageKey) || "[]");
-    return Array.isArray(reviews) ? reviews : [];
-  } catch (error) {
-    console.warn("Unable to read friend reviews", error);
-    return [];
-  }
+  return friendReviewStore.read();
 }
 
 function saveFriendReviews(reviews) {
-  try {
-    localStorage.setItem(friendReviewStorageKey, JSON.stringify(reviews));
-  } catch (error) {
-    console.warn("Unable to save friend reviews", error);
-  }
+  friendReviewStore.write(reviews);
 }
 
 function resetFriendReviewFields() {
@@ -2095,44 +1706,44 @@ function renderFriendReviewSummary() {
     return;
   }
 
-  const averageScore = (key) => average(reviews.map((review) => Number(review[key]) || 0)).toFixed(1);
-  const describeCounts = (key, labels) =>
-    Object.entries(labels)
-      .map(([value, label]) => `${label} ${reviews.filter((review) => review[key] === value).length}`)
-      .join(" / ");
-  const notes = reviews
-    .filter((review) => review.note)
-    .slice(0, 3)
-    .map((review) => `<small>${escapeHtml(String(review.note))}</small>`)
-    .join("");
+  const groupedReviews = reviews.reduce((groups, review) => {
+    const version = review.renderVersion ?? "render-v5-natural-makeup";
+    groups[version] ??= [];
+    groups[version].push(review);
+    return groups;
+  }, {});
 
-  refs.friendReviewSummary.innerHTML = `
-    <article>
-      <strong>已收集 ${reviews.length} 条试玩总结</strong>
-      <span>推荐贴合度 ${averageScore("fitScore")} / 5；妆效自然度 ${averageScore("naturalnessScore")} / 5</span>
-      <small>隐私：${describeCounts("privacyComfort", friendPrivacyComfortLabels)}</small>
-      <small>复用：${describeCounts("reuseIntent", friendReuseIntentLabels)}</small>
-      ${notes}
-    </article>
-  `;
+  refs.friendReviewSummary.innerHTML = Object.entries(groupedReviews)
+    .map(([version, versionReviews]) => {
+      const averageScore = (key) => average(versionReviews.map((review) => Number(review[key]) || 0)).toFixed(1);
+      const describeCounts = (key, labels) =>
+        Object.entries(labels)
+          .map(([value, label]) => `${label} ${versionReviews.filter((review) => review[key] === value).length}`)
+          .join(" / ");
+      const notes = versionReviews
+        .filter((review) => review.note)
+        .slice(0, 3)
+        .map((review) => `<small>${escapeHtml(String(review.note))}</small>`)
+        .join("");
+      return `
+        <article>
+          <strong>${version}：${versionReviews.length} 条</strong>
+          <span>推荐贴合度 ${averageScore("fitScore")} / 5；妆效自然度 ${averageScore("naturalnessScore")} / 5</span>
+          <small>隐私：${describeCounts("privacyComfort", friendPrivacyComfortLabels)}</small>
+          <small>复用：${describeCounts("reuseIntent", friendReuseIntentLabels)}</small>
+          ${notes}
+        </article>
+      `;
+    })
+    .join("");
 }
 
 function readMakeupStepFeedback() {
-  try {
-    const feedback = JSON.parse(localStorage.getItem(makeupStepFeedbackStorageKey) || "[]");
-    return Array.isArray(feedback) ? feedback : [];
-  } catch (error) {
-    console.warn("Unable to read makeup step feedback", error);
-    return [];
-  }
+  return makeupStepFeedbackStore.read();
 }
 
 function saveMakeupStepFeedback(feedback) {
-  try {
-    localStorage.setItem(makeupStepFeedbackStorageKey, JSON.stringify(feedback.slice(-100)));
-  } catch (error) {
-    console.warn("Unable to save makeup step feedback", error);
-  }
+  makeupStepFeedbackStore.write(feedback);
 }
 
 function isCurrentMakeupStepFeedback(item, stepId) {
@@ -2168,6 +1779,7 @@ function recordMakeupStepFeedback(stepId, value) {
       label: makeupStepFeedbackLabels[value] ?? value,
       lookId: activeLook.id,
       lookName: activeLook.name,
+      renderVersion,
       preferences: { ...preferenceState },
       at: new Date().toISOString(),
     });
@@ -2397,6 +2009,7 @@ function buildReviewCsvRows() {
     qualityPercent: signalPercent(item.signals?.quality),
     luminancePercent: signalPercent(item.signals?.luminance),
     warmthPercent: signalPercent(item.signals?.warmth),
+    renderVersion: item.renderVersion ?? "render-v5-natural-makeup",
     note: item.note ?? "",
     privacy: "no_image_or_video_frame",
   }));
@@ -2427,7 +2040,11 @@ function buildReviewCsvRows() {
     issueTags: (run.issueTags ?? []).join(";"),
     landmarkStabilityScore: run.scores?.landmarkStability ?? "",
     lipEdgeScore: run.scores?.lipEdge ?? "",
+    lipTextureScore: run.scores?.lipTexture ?? "",
+    lipNaturalnessScore: run.scores?.lipNaturalness ?? "",
     blushPlacementScore: run.scores?.blushPlacement ?? "",
+    blushColorScore: run.scores?.blushColor ?? "",
+    blushNaturalnessScore: run.scores?.blushNaturalness ?? "",
     eyeshadowAlignmentScore: run.scores?.eyeshadowAlignment ?? "",
     colorVisibilityScore: run.scores?.colorVisibility ?? "",
     recommendationTasteScore: run.scores?.recommendationTaste ?? "",
@@ -2454,6 +2071,7 @@ function buildReviewCsvRows() {
     browStyle: item.preferences?.browStyle,
     eyeFocus: item.preferences?.eyeFocus,
     lipTexture: item.preferences?.lipTexture,
+    renderVersion: item.renderVersion ?? "render-v5-natural-makeup",
     note: item.stepLabel,
     privacy: "no_image_or_video_frame",
   }));
@@ -2478,6 +2096,7 @@ function buildReviewCsvRows() {
     qualityPercent: signalPercent(review.signals?.quality),
     luminancePercent: signalPercent(review.signals?.luminance),
     warmthPercent: signalPercent(review.signals?.warmth),
+    renderVersion: review.renderVersion ?? "render-v5-natural-makeup",
     privacyComfort: review.privacyComfort,
     fitScore: review.fitScore,
     naturalnessScore: review.naturalnessScore,
@@ -2507,6 +2126,7 @@ function buildReviewCsvRows() {
     qualityPercent: signalPercent(review.signals?.quality),
     luminancePercent: signalPercent(review.signals?.luminance),
     warmthPercent: signalPercent(review.signals?.warmth),
+    renderVersion: review.renderVersion ?? "render-v5-natural-makeup",
     note: review.note,
     privacy: "no_image_or_video_frame",
   }));
@@ -2551,7 +2171,11 @@ function toCsv(rows) {
     ["issueTags", "issue_tags"],
     ["landmarkStabilityScore", "landmark_stability_score"],
     ["lipEdgeScore", "lip_edge_score"],
+    ["lipTextureScore", "lip_texture_score"],
+    ["lipNaturalnessScore", "lip_naturalness_score"],
     ["blushPlacementScore", "blush_placement_score"],
+    ["blushColorScore", "blush_color_score"],
+    ["blushNaturalnessScore", "blush_naturalness_score"],
     ["eyeshadowAlignmentScore", "eyeshadow_alignment_score"],
     ["colorVisibilityScore", "color_visibility_score"],
     ["recommendationTasteScore", "recommendation_taste_score"],
@@ -2586,43 +2210,25 @@ function scaleActiveIntensity(scale) {
 }
 
 function switchToAlternativeLook() {
-  const profile = buildPreferenceProfile();
-  const candidates = looks
-    .filter((look) => look.id !== activeLook.id)
-    .map((look) => ({ look, score: preferenceScore(look, profile) }))
-    .sort((a, b) => b.score - a.score);
+  const candidates = rankLooksByPreference({
+    looks,
+    preferenceProfile: buildPreferenceProfile(),
+    excludeLookId: activeLook.id,
+  });
   if (candidates[0]) setLook(candidates[0].look);
 }
 
-function budgetHint(budget) {
-  const hints = {
-    starter: "产品清单会优先给平价同色系替代",
-    balanced: "产品清单会优先给开架与中端的均衡组合",
-    premium: "产品清单可以加入更高质感的进阶单品",
-    sensitive: "产品清单会优先避开高刺激、高香精表达",
-  };
-  return hints[budget] ?? hints.starter;
-}
-
 function restorePreferenceState() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(storageKey) || "null");
-    if (!saved || typeof saved !== "object") return;
-    for (const key of Object.keys(preferenceState)) {
-      if (preferencePresets[key]?.[saved[key]]) preferenceState[key] = saved[key];
-    }
-    syncPreferenceInputs();
-  } catch (error) {
-    console.warn("Unable to restore preferences", error);
+  const saved = preferenceStore.read();
+  if (!saved) return;
+  for (const key of Object.keys(preferenceState)) {
+    if (preferencePresets[key]?.[saved[key]]) preferenceState[key] = saved[key];
   }
+  syncPreferenceInputs();
 }
 
 function savePreferenceState() {
-  try {
-    localStorage.setItem(storageKey, JSON.stringify(preferenceState));
-  } catch (error) {
-    console.warn("Unable to save preferences", error);
-  }
+  preferenceStore.write(preferenceState);
 }
 
 function syncPreferenceInputs() {
@@ -2632,16 +2238,14 @@ function syncPreferenceInputs() {
 }
 
 function clearLocalData() {
-  try {
-    localStorage.removeItem(storageKey);
-    localStorage.removeItem(feedbackStorageKey);
-    localStorage.removeItem(makeupStepFeedbackStorageKey);
-    localStorage.removeItem(testRunStorageKey);
-    localStorage.removeItem(expertReviewStorageKey);
-    localStorage.removeItem(friendReviewStorageKey);
-  } catch (error) {
-    console.warn("Unable to clear preferences", error);
-  }
+  clearStores([
+    preferenceStore,
+    feedbackStore,
+    makeupStepFeedbackStore,
+    testRunStore,
+    expertReviewStore,
+    friendReviewStore,
+  ]);
 
   Object.assign(preferenceState, {
     occasion: "daily",
@@ -2686,217 +2290,15 @@ function clearLocalData() {
 }
 
 function buildPreferenceProfile() {
-  const selected = [
-    preferencePresets.occasion[preferenceState.occasion],
-    preferencePresets.goal[preferenceState.goal],
-    preferencePresets.finish[preferenceState.finish],
-    preferencePresets.budget[preferenceState.budget],
-  ];
-  const detailSelected = [
-    preferencePresets.baseCoverage[preferenceState.baseCoverage],
-    preferencePresets.browStyle[preferenceState.browStyle],
-    preferencePresets.eyeFocus[preferenceState.eyeFocus],
-    preferencePresets.lipTexture[preferenceState.lipTexture],
-  ];
-  const existingMakeup = preferencePresets.existingMakeup[preferenceState.existingMakeup] ?? preferencePresets.existingMakeup.bare;
-  const moods = [...selected, ...detailSelected].flatMap((item) => item.moods);
-  const blendedValue = (key) => average(selected.map((item) => item[key])) * 0.65 + average(detailSelected.map((item) => item[key])) * 0.35;
-  return {
-    labels: selected.map((item) => item.label),
-    detailLabels: detailSelected.map((item) => item.label),
-    finish: preferenceState.finish,
-    existingMakeup: preferenceState.existingMakeup,
-    existingMakeupLabel: existingMakeup.label,
-    visibilityFloor: existingMakeup.visibilityFloor,
-    options: {
-      baseCoverage: preferenceState.baseCoverage,
-      browStyle: preferenceState.browStyle,
-      eyeFocus: preferenceState.eyeFocus,
-      lipTexture: preferenceState.lipTexture,
-    },
-    moods,
-    intensity: blendedValue("intensity"),
-    warmth: blendedValue("warmth"),
-    clarity: blendedValue("clarity"),
-    light: blendedValue("light"),
-  };
-}
-
-function preferenceScore(look, preferenceProfile) {
-  const profile = look.profile;
-  const moodScore = preferenceProfile.moods.includes(profile.mood) ? 1 : 0.42;
-  return clamp(
-    similarity(profile.intensity, preferenceProfile.intensity, 0.48) * 0.28 +
-      similarity(profile.warmth, preferenceProfile.warmth, 0.66) * 0.2 +
-      similarity(profile.clarity, preferenceProfile.clarity, 0.54) * 0.2 +
-      similarity(profile.light, preferenceProfile.light, 0.52) * 0.14 +
-      moodScore * 0.18,
-    0,
-    1
-  );
-}
-
-function preferenceChips(preferenceProfile) {
-  return [
-    `场景 ${preferenceProfile.labels[0]}`,
-    `目标 ${preferenceProfile.labels[1]}`,
-    `妆感 ${preferenceProfile.labels[2]}`,
-    `预算 ${preferenceProfile.labels[3]}`,
-    `原照 ${preferenceProfile.existingMakeupLabel}`,
-    preferenceProfile.intensity > 0.5 ? "偏显色" : preferenceProfile.intensity < 0.34 ? "低负担" : "中等显色",
-  ];
-}
-
-function recommendationChips({ quality, luminance, warmth, mouthOpen, desiredIntensity, pose, gate }, preferenceProfile) {
-  return [
-    `目标 ${preferenceProfile.labels[1]}`,
-    lightLabel(luminance),
-    toneLabel(warmth),
-    guidanceForFace(quality, { luminance }, pose).label,
-    gate.id === "retake_recommended" || gate.id === "cannot_analyze"
-      ? "暂停应用推荐"
-      : mouthOpen > 0.28
-        ? "暂停唇部覆盖"
-        : mouthOpen > 0.1
-          ? "唇部保守预览"
-          : preferenceProfile.existingMakeup === "visible"
-            ? "提高预览对比度"
-            : desiredIntensity > 0.48
-              ? "提升气色"
-              : "低负担妆效",
-  ];
+  return buildPreferenceProfilePure({ preferences: preferenceState, presets: preferencePresets });
 }
 
 function preferenceRecommendationReason(look, preferenceProfile) {
-  const [occasion, goal, finish, budget] = preferenceProfile.labels;
-  const makeupText = preferenceProfile.existingMakeup === "visible" ? "原照片已有明显妆容，后续预览会优先保留可辨认的对比度" : preferenceProfile.existingMakeup === "light" ? "原照片带有淡妆，后续会避免颜色被原妆完全吃掉" : "原照片按素颜处理";
-  return `你选择了${occasion}、${goal}、${finish}和${budget}预算，系统先按目标筛出 ${look.name}。${makeupText}。开启摄像头或上传照片后，会继续结合角度、画面条件和肤色采样修正推荐。`;
-}
-
-function recommendationReason(look, signals, preferenceProfile) {
-  const [occasion, goal, finish, budget] = preferenceProfile.labels;
-  const lightText = lightReason(signals.luminance);
-  const toneText = toneReason(signals.warmth);
-  const fitText = fitReason(signals);
-  const makeupText = preferenceProfile.existingMakeup === "visible" ? "你标记了原照片已有明显妆容，因此系统会优先使用更容易区分的颜色和强度" : preferenceProfile.existingMakeup === "light" ? "你标记了原照片带淡妆，预览会保留额外色差" : "原照片按素颜处理";
-  const intensityText =
-    signals.desiredIntensity > 0.5
-      ? "可以保留一点显色度来提气色"
-      : signals.desiredIntensity < 0.34
-        ? "妆感会压低对比度，避免显得厚重"
-        : "整体强度控制在日常可穿的中间值";
-  return `你选择的是${occasion}、${goal}、${finish}和${budget}预算；脸部分析显示${lightLabel(signals.luminance)}、${toneLabel(signals.warmth)}、${guidanceForFace(signals.quality, { luminance: signals.luminance }, signals.pose).label}。${makeupText}。因此推荐 ${look.name}：${lightText}，${toneText}，${intensityText}。${fitText}`;
-}
-
-function guidanceForFace(quality, faceTone = neutralTone(), pose = {}) {
-  if ((pose.mouthOpen ?? 0) > 0.28) {
-    return {
-      label: "张嘴需重拍",
-      tone: "warn",
-      summary: "嘴部动作会让唇部覆盖失真",
-      message: "检测到张嘴幅度较大。已暂停唇部覆盖，请闭合双唇后重新拍摄或继续测试。",
-    };
-  }
-  if ((pose.mouthOpen ?? 0) > 0.12) {
-    return {
-      label: "张嘴需重拍",
-      tone: "warn",
-      summary: "嘴部动作会降低唇部预览可信度",
-      message: "检测到轻中度张嘴。系统保留低强度的安全部分预览并避开内唇区域；请闭合双唇后再确认最终唇线。",
-    };
-  }
-  if ((pose.yaw ?? 0) > 0.32) {
-    return {
-      label: "侧脸需重拍",
-      tone: "warn",
-      summary: "侧脸会影响遮挡和透视",
-      message: "检测到侧脸角度较大。系统只保留可见侧妆效，并暂停高置信度推荐。请转向镜头后重拍。",
-    };
-  }
-  if ((pose.yaw ?? 0) > 0.16) {
-    return {
-      label: "侧脸需重拍",
-      tone: "warn",
-      summary: "侧转会降低远侧妆效可信度",
-      message: "检测到轻中度侧转。系统保留双侧预览，但会降低远侧妆效强度并暂停高置信度推荐；请转向镜头后再确认位置。",
-    };
-  }
-  if (faceTone?.luminance < 0.26 || faceTone?.luminance > 0.9) {
-    return {
-      label: "画面亮度待确认",
-      tone: "warn",
-      summary: "亮度不会直接决定肤色或妆效可信度",
-      message: "画面亮度偏离常见范围。系统保留显色补偿，不会把肤色亮度直接当作低质量；请人工确认预览是否清晰。",
-    };
-  }
-  if (quality >= 0.72) {
-    return {
-      label: "贴合良好",
-      tone: "ok",
-      summary: "关键点贴合良好",
-      message: "识别稳定。可以应用推荐、调整强度，或记录当前样本。",
-    };
-  }
-  if (quality >= 0.48) {
-    return {
-      label: "轻微降噪",
-      tone: "warn",
-      summary: "关键点可用，边缘会轻微柔化",
-      message: "已识别但贴合一般。请让脸更靠近画面中央，妆效会轻微柔化边缘。",
-    };
-  }
-  return {
-    label: "角度偏大",
-    tone: "warn",
-    summary: "角度或距离影响贴合，推荐会更保守",
-    message: "角度或距离影响贴合。请面向镜头，让脸部占画面约三分之一。",
-  };
+  return preferenceRecommendationReasonPure(look, preferenceProfile);
 }
 
 function currentQualityGate() {
   return qualityGateFromSignals(lastProfileSignals);
-}
-
-function lightLabel(luminance) {
-  if (luminance < 0.34) return "光线偏暗";
-  if (luminance > 0.78) return "光线偏亮";
-  return "光线稳定";
-}
-
-function toneLabel(warmth) {
-  if (warmth > 0.18) return "画面偏暖";
-  if (warmth < -0.08) return "画面偏冷";
-  return "中性光感";
-}
-
-function lightReason(luminance) {
-  if (luminance < 0.34) return "当前画面亮度偏低，系统会保留显色补偿；请以预览可见度而不是肤色亮度判断是否需要重拍";
-  if (luminance > 0.78) return "当前画面偏亮，需要稍有存在感的颜色，避免妆效被吃掉";
-  return "当前光线稳定，可以保留自然肤感和清晰边界";
-}
-
-function toneReason(warmth) {
-  if (warmth > 0.18) return "画面偏暖，蜜桃、珊瑚或柔玫瑰会更自然地提气色";
-  if (warmth < -0.08) return "画面偏冷，豆沙、梅子或灰调玫瑰能减少突兀感";
-  return "光感接近中性，冷暖色都有空间，优先跟随你选择的场景目标";
-}
-
-function fitReason(signals) {
-  if ((signals.mouthOpen ?? 0) > 0.28) return "嘴部动作较大，系统已暂停唇部覆盖，避免欠填或轮廓变形。";
-  if ((signals.pose?.yaw ?? 0) > 0.32) return "侧脸角度较大，系统不会继续渲染远侧妆效，也不会给出高置信度推荐。";
-  if ((signals.mouthOpen ?? 0) > 0.12) return "嘴部存在轻中度动作，系统仅保留避开内唇区域的低强度部分预览；最终唇线需要闭嘴重拍后确认。";
-  if ((signals.pose?.yaw ?? 0) > 0.16) return "画面存在轻中度侧转，系统会保留双侧预览并降低远侧强度，同时压低推荐置信度。";
-  if (signals.quality < 0.48) return "当前贴合质量一般，所以系统会选择边界更柔和、强度更保守的方案。";
-  if ((signals.mouthOpen ?? 0) > 0.08) return "嘴部存在轻微动作，系统会降低唇部重量，减少压唇线的问题。";
-  return "当前关键点稳定，可以保留唇、腮红和眼影的细节。";
-}
-
-function similarity(value, target, range) {
-  return clamp(1 - Math.abs(value - target) / range, 0, 1);
-}
-
-function average(values) {
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 function escapeHtml(value) {
@@ -2910,108 +2312,6 @@ function escapeHtml(value) {
     };
     return entities[char];
   });
-}
-
-function drawClosedPath(points) {
-  drawClosedPathOn(ctx, points);
-}
-
-function drawClosedPathOn(targetCtx, points) {
-  if (!points.length) return;
-  targetCtx.beginPath();
-  targetCtx.moveTo(points[0].x, points[0].y);
-  for (let index = 1; index < points.length; index += 1) {
-    targetCtx.lineTo(points[index].x, points[index].y);
-  }
-  targetCtx.closePath();
-}
-
-function drawOpenPath(points) {
-  if (!points.length) return;
-  ctx.beginPath();
-  ctx.moveTo(points[0].x, points[0].y);
-  for (let index = 1; index < points.length; index += 1) {
-    ctx.lineTo(points[index].x, points[index].y);
-  }
-}
-
-function drawBlushCloud(x, y, radiusX, radiusY, rotation, color, intensity) {
-  const lobes = [
-    { x: -0.18, y: -0.04, radiusX: 0.82, radiusY: 0.9, intensity: 0.54 },
-    { x: 0.08, y: 0.02, radiusX: 1, radiusY: 1, intensity: 0.68 },
-    { x: 0.34, y: 0.08, radiusX: 0.68, radiusY: 0.82, intensity: 0.42 },
-  ];
-  const cos = Math.cos(rotation);
-  const sin = Math.sin(rotation);
-
-  for (const lobe of lobes) {
-    const localX = radiusX * lobe.x;
-    const localY = radiusY * lobe.y;
-    drawSoftEllipse(
-      x + localX * cos - localY * sin,
-      y + localX * sin + localY * cos,
-      radiusX * lobe.radiusX,
-      radiusY * lobe.radiusY,
-      rotation,
-      color,
-      intensity * lobe.intensity
-    );
-  }
-}
-
-function drawSoftEllipse(x, y, radiusX, radiusY, rotation, color, intensity) {
-  if (radiusX <= 0 || radiusY <= 0 || intensity <= 0) return;
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(rotation);
-  ctx.scale(radiusX, radiusY);
-  const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
-  gradient.addColorStop(0, colorWithAlpha(color, intensity * 0.42));
-  gradient.addColorStop(0.34, colorWithAlpha(color, intensity * 0.31));
-  gradient.addColorStop(0.68, colorWithAlpha(color, intensity * 0.105));
-  gradient.addColorStop(0.9, colorWithAlpha(color, intensity * 0.024));
-  gradient.addColorStop(1, colorWithAlpha(color, 0));
-  ctx.fillStyle = gradient;
-  ctx.beginPath();
-  ctx.arc(0, 0, 1, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
-function drawFeatheredFill({ paths, erasePaths = [], color, blur, eraseBlur = blur, composite }) {
-  ensureMakeupLayer();
-  makeupLayerCtx.clearRect(0, 0, makeupLayer.width, makeupLayer.height);
-
-  makeupLayerCtx.save();
-  makeupLayerCtx.fillStyle = color;
-  makeupLayerCtx.filter = `blur(${blur}px)`;
-  for (const path of paths) {
-    drawClosedPathOn(makeupLayerCtx, path);
-    makeupLayerCtx.fill();
-  }
-
-  if (erasePaths.length) {
-    makeupLayerCtx.globalCompositeOperation = "destination-out";
-    makeupLayerCtx.fillStyle = "rgba(0, 0, 0, 1)";
-    makeupLayerCtx.filter = `blur(${eraseBlur}px)`;
-    for (const path of erasePaths) {
-      drawClosedPathOn(makeupLayerCtx, path);
-      makeupLayerCtx.fill();
-    }
-  }
-  makeupLayerCtx.restore();
-
-  ctx.save();
-  ctx.globalCompositeOperation = composite;
-  ctx.drawImage(makeupLayer, 0, 0);
-  ctx.restore();
-}
-
-function ensureMakeupLayer() {
-  if (makeupLayer.width !== refs.canvas.width || makeupLayer.height !== refs.canvas.height) {
-    makeupLayer.width = refs.canvas.width;
-    makeupLayer.height = refs.canvas.height;
-  }
 }
 
 function sampleToneFromIndices(landmarks, mirrored, indices, padding) {
@@ -3062,95 +2362,6 @@ function sampleToneFromPoints(points, padding = 10) {
   }
 }
 
-function assessCheekReliability(center, radiusX, radiusY, rotation) {
-  const stats = sampleEllipseStats(center, radiusX * 0.86, radiusY * 0.92, rotation);
-  if (stats.count < 48) {
-    return {
-      reliable: false,
-      reliability: 0,
-      edgeEnergy: stats.edgeEnergy,
-      luminanceStd: stats.luminanceStd,
-      sampleCount: stats.count,
-    };
-  }
-
-  const edgeRisk = clamp(mapRange(stats.edgeEnergy, 0.035, 0.13, 0, 1), 0, 1);
-  const varianceRisk = clamp(mapRange(stats.luminanceStd, 0.07, 0.23, 0, 1), 0, 1);
-  const reliability = clamp(1 - edgeRisk * 0.68 - varianceRisk * 0.32, 0, 1);
-  const uncertain = stats.edgeEnergy > 0.14 || (stats.edgeEnergy > 0.085 && stats.luminanceStd > 0.115) || reliability < 0.34;
-  return {
-    reliable: !uncertain,
-    reliability: Number(reliability.toFixed(3)),
-    edgeEnergy: Number(stats.edgeEnergy.toFixed(3)),
-    luminanceStd: Number(stats.luminanceStd.toFixed(3)),
-    sampleCount: stats.count,
-  };
-}
-
-function sampleEllipseStats(center, radiusX, radiusY, rotation) {
-  if (refs.canvas.width <= 1 || refs.canvas.height <= 1) {
-    return { count: 0, edgeEnergy: 1, luminanceStd: 1 };
-  }
-
-  const padding = Math.max(radiusX, radiusY) * 1.08;
-  const bounds = getBounds([center], padding);
-  try {
-    const pixels = ctx.getImageData(bounds.x, bounds.y, bounds.width, bounds.height).data;
-    const step = Math.max(1, Math.floor(Math.sqrt((bounds.width * bounds.height) / 900)));
-    const cos = Math.cos(rotation);
-    const sin = Math.sin(rotation);
-    let luminanceSum = 0;
-    let luminanceSquaredSum = 0;
-    let edgeSum = 0;
-    let edgeCount = 0;
-    let count = 0;
-
-    const luminanceAt = (x, y) => {
-      const offset = (y * bounds.width + x) * 4;
-      return (0.2126 * pixels[offset] + 0.7152 * pixels[offset + 1] + 0.0722 * pixels[offset + 2]) / 255;
-    };
-    const inside = (canvasX, canvasY) => {
-      const dx = canvasX - center.x;
-      const dy = canvasY - center.y;
-      const localX = (dx * cos + dy * sin) / Math.max(radiusX, 1);
-      const localY = (-dx * sin + dy * cos) / Math.max(radiusY, 1);
-      return localX * localX + localY * localY <= 1;
-    };
-
-    for (let y = 0; y < bounds.height; y += step) {
-      for (let x = 0; x < bounds.width; x += step) {
-        const canvasX = bounds.x + x;
-        const canvasY = bounds.y + y;
-        if (!inside(canvasX, canvasY)) continue;
-        const luminance = luminanceAt(x, y);
-        luminanceSum += luminance;
-        luminanceSquaredSum += luminance * luminance;
-        count += 1;
-
-        const rightX = x + step;
-        const downY = y + step;
-        if (rightX < bounds.width && inside(bounds.x + rightX, canvasY)) {
-          edgeSum += Math.abs(luminance - luminanceAt(rightX, y));
-          edgeCount += 1;
-        }
-        if (downY < bounds.height && inside(canvasX, bounds.y + downY)) {
-          edgeSum += Math.abs(luminance - luminanceAt(x, downY));
-          edgeCount += 1;
-        }
-      }
-    }
-
-    const mean = count ? luminanceSum / count : 0;
-    return {
-      count,
-      edgeEnergy: edgeCount ? edgeSum / edgeCount : 1,
-      luminanceStd: count ? Math.sqrt(Math.max(0, luminanceSquaredSum / count - mean * mean)) : 1,
-    };
-  } catch (error) {
-    return { count: 0, edgeEnergy: 1, luminanceStd: 1 };
-  }
-}
-
 function getBounds(points, padding) {
   const xs = points.map((p) => p.x);
   const ys = points.map((p) => p.y);
@@ -3166,118 +2377,10 @@ function getBounds(points, padding) {
   };
 }
 
-function neutralTone() {
-  return { r: 168, g: 136, b: 124, luminance: 0.56, warmth: 0.18 };
-}
-
-function makeupVisibilityMultiplier(tone) {
-  const luminance = tone?.luminance ?? 0.56;
-  const darkContrastBoost = clamp(mapRange(luminance, 0.18, 0.46, 1.28, 1.06), 1.06, 1.28);
-  const brightContrastBoost = clamp(mapRange(luminance, 0.76, 0.95, 1, 1.1), 1, 1.1);
-  const existingMakeupBoost = {
-    bare: 1,
-    light: 1.08,
-    visible: 1.18,
-  }[preferenceState.existingMakeup] ?? 1;
-  return darkContrastBoost * brightContrastBoost * existingMakeupBoost;
-}
-
-function adaptEyeShadowColor(hex, tone, warmSafe) {
-  const color = adaptMakeupColor(hex, tone, {
-    mix: 0.05,
-    lightBoost: 0.94,
-    minimumContrast: 0.14,
-    warmSafe,
-  });
-  if (!warmSafe) return color;
-
-  const warmAmount = clamp(mapRange(tone?.warmth ?? 0.08, 0.08, 0.32, 0.24, 0.48), 0.24, 0.48);
-  const warmed = mixRgb(color, { r: 142, g: 91, b: 58 }, warmAmount);
-  return {
-    r: warmed.r,
-    g: Math.max(warmed.g, warmed.r * 0.58),
-    b: Math.min(warmed.b, warmed.r * 0.62),
-  };
-}
-
-function adaptMakeupColor(hex, tone, options = {}) {
-  const { mix = 0.1, lightBoost = 1, minimumContrast = 0.12, warmSafe = false } = options;
-  const base = hexToRgb(hex);
-  const luminance = tone?.luminance ?? 0.56;
-  const lightScale = clamp(mapRange(luminance, 0.2, 0.82, 1.12, 0.98), 0.98, 1.12) * lightBoost;
-  let warmed = {
-    r: base.r * lightScale * (1 + clamp(tone?.warmth ?? 0, -0.12, 0.18) * 0.08),
-    g: base.g * lightScale,
-    b: base.b * lightScale * (1 - clamp(tone?.warmth ?? 0, -0.12, 0.18) * 0.05),
-  };
-  if (warmSafe) {
-    const warmAmount = clamp(mapRange(tone?.warmth ?? 0.08, 0.08, 0.32, 0.18, 0.42), 0.18, 0.42);
-    warmed = mixRgb(warmed, { r: 146, g: 96, b: 70 }, warmAmount);
-    warmed.b = Math.min(warmed.b, warmed.r * 0.78);
-  }
-  const toneMix = clamp(mix * mapRange(luminance, 0.2, 0.82, 0.62, 1), 0.04, mix);
-  return ensureColorContrast(mixRgb(warmed, tone ?? neutralTone(), toneMix), tone, minimumContrast);
-}
-
-function ensureColorContrast(color, tone, minimumContrast) {
-  const toneLuminance = tone?.luminance ?? 0.56;
-  const colorLuminance = (0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b) / 255;
-  if (Math.abs(colorLuminance - toneLuminance) >= minimumContrast) return color;
-
-  const targetLuminance = toneLuminance < 0.46
-    ? Math.min(0.93, toneLuminance + minimumContrast)
-    : Math.max(0.07, toneLuminance - minimumContrast);
-  const scale = targetLuminance / Math.max(colorLuminance, 0.05);
-  return {
-    r: clamp(color.r * scale, 0, 255),
-    g: clamp(color.g * scale, 0, 255),
-    b: clamp(color.b * scale, 0, 255),
-  };
-}
-
-function eyeLidShadowPath(indices, landmarks, mirrored, lift) {
-  const lid = indices.map((index) => point(landmarks[index], mirrored));
-  const raised = lid.map((p) => raise(p, -lift));
-  return [...raised, ...lid.slice().reverse()];
-}
-
 function point(landmark, mirrored) {
   const x = (mirrored ? 1 - landmark.x : landmark.x) * refs.canvas.width;
   const y = landmark.y * refs.canvas.height;
   return { x, y };
-}
-
-function mixPoints(a, b, amount) {
-  const weight = clamp(amount, 0, 1);
-  return {
-    x: a.x * (1 - weight) + b.x * weight,
-    y: a.y * (1 - weight) + b.y * weight,
-  };
-}
-
-function movePoint(source, offset) {
-  return { x: source.x + offset.x, y: source.y + offset.y };
-}
-
-function raise(p, amount) {
-  return { x: p.x, y: p.y + amount };
-}
-
-function distance(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
-function angleBetween(a, b) {
-  return Math.atan2(b.y - a.y, b.x - a.x);
-}
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function mapRange(value, inMin, inMax, outMin, outMax) {
-  const progress = clamp((value - inMin) / (inMax - inMin), 0, 1);
-  return outMin + (outMax - outMin) * progress;
 }
 
 function resizeCanvas(width, height) {
@@ -3307,52 +2410,6 @@ function captureCanvas() {
     refs.downloadLink.href = url;
     refs.downloadLink.classList.add("ready");
   }, "image/png");
-}
-
-function withAlpha(hex, alpha) {
-  const { r, g, b } = hexToRgb(hex);
-  return rgbaFromRgb({ r, g, b }, alpha);
-}
-
-function colorWithAlpha(color, alpha) {
-  return typeof color === "string" ? withAlpha(color, alpha) : rgbaFromRgb(color, alpha);
-}
-
-function rgbaFromRgb(rgb, alpha) {
-  const r = Math.round(clamp(rgb.r, 0, 255));
-  const g = Math.round(clamp(rgb.g, 0, 255));
-  const b = Math.round(clamp(rgb.b, 0, 255));
-  return `rgba(${r}, ${g}, ${b}, ${clamp(alpha, 0, 1)})`;
-}
-
-function mixRgb(a, b, amount) {
-  const weight = clamp(amount, 0, 1);
-  return {
-    r: a.r * (1 - weight) + b.r * weight,
-    g: a.g * (1 - weight) + b.g * weight,
-    b: a.b * (1 - weight) + b.b * weight,
-  };
-}
-
-function hexToRgb(hex) {
-  const value = hex.replace("#", "");
-  return {
-    r: parseInt(value.slice(0, 2), 16),
-    g: parseInt(value.slice(2, 4), 16),
-    b: parseInt(value.slice(4, 6), 16),
-  };
-}
-
-function lightenHex(hex, amount) {
-  const { r, g, b } = hexToRgb(hex);
-  const mix = (channel) => Math.round(channel + (255 - channel) * amount);
-  return rgbToHex(mix(r), mix(g), mix(b));
-}
-
-function rgbToHex(r, g, b) {
-  return `#${[r, g, b]
-    .map((channel) => Math.round(clamp(channel, 0, 255)).toString(16).padStart(2, "0"))
-    .join("")}`;
 }
 
 function stopLoop() {

@@ -238,7 +238,11 @@
           <div class="score-grid" aria-label="Round 1 评分">
             <label><span>关键点</span><select data-validation-score="landmarkStability"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
             <label><span>唇线</span><select data-validation-score="lipEdge"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
-            <label><span>腮红</span><select data-validation-score="blushPlacement"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+            <label><span>唇部质地</span><select data-validation-score="lipTexture"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+            <label><span>唇部自然度</span><select data-validation-score="lipNaturalness"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+            <label><span>腮红位置</span><select data-validation-score="blushPlacement"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+            <label><span>腮红颜色</span><select data-validation-score="blushColor"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+            <label><span>腮红自然度</span><select data-validation-score="blushNaturalness"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
             <label><span>眼影</span><select data-validation-score="eyeshadowAlignment"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
             <label><span>显色</span><select data-validation-score="colorVisibility"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
             <label><span>审美</span><select data-validation-score="recommendationTaste"><option value="">--</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
@@ -246,9 +250,20 @@
           </div>
           <div class="issue-grid" aria-label="失败标签">
             <button class="sample-chip" type="button" data-validation-issue="lip_edge_overdraw">唇线外溢</button>
+            <button class="sample-chip" type="button" data-validation-issue="lip_edge_underfill">唇线欠填</button>
             <button class="sample-chip" type="button" data-validation-issue="lip_too_strong">口红过重</button>
+            <button class="sample-chip" type="button" data-validation-issue="lip_texture_mismatch">唇部质地不符</button>
+            <button class="sample-chip" type="button" data-validation-issue="lip_mouth_spill">嘴腔染色</button>
+            <button class="sample-chip" type="button" data-validation-issue="lip_teeth_spill">牙齿染色</button>
+            <button class="sample-chip" type="button" data-validation-issue="lip_highlight_drift">高光漂移</button>
+            <button class="sample-chip" type="button" data-validation-issue="lip_texture_flicker">质地闪烁</button>
             <button class="sample-chip" type="button" data-validation-issue="blush_not_visible">腮红不可见</button>
             <button class="sample-chip" type="button" data-validation-issue="blush_too_high">腮红过高</button>
+            <button class="sample-chip" type="button" data-validation-issue="blush_too_low">腮红过低</button>
+            <button class="sample-chip" type="button" data-validation-issue="blush_too_inner">腮红过内</button>
+            <button class="sample-chip" type="button" data-validation-issue="blush_too_outer">腮红过外</button>
+            <button class="sample-chip" type="button" data-validation-issue="blush_color_mismatch">腮红色号不合适</button>
+            <button class="sample-chip" type="button" data-validation-issue="blush_asymmetry">腮红左右不一致</button>
             <button class="sample-chip" type="button" data-validation-issue="eyeshadow_not_visible">眼影不可见</button>
             <button class="sample-chip" type="button" data-validation-issue="eyeshadow_drift">眼影漂移</button>
             <button class="sample-chip" type="button" data-validation-issue="color_not_visible">颜色不可见</button>
@@ -507,6 +522,6 @@
       </div>
     </section>
 
-    <script type="module" src="./app.js?v=5.1-ios"></script>
+    <script type="module" src="./app.js?v=7.3-continuous-cheek"></script>
   </body>
 </html>
