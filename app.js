@@ -25,12 +25,8 @@ import {
 import { neutralTone } from "./render/color.mjs?v=7.3-architecture";
 import { clearStores, createArrayStore, createObjectStore } from "./persistence.mjs?v=7.3-architecture";
 import { releaseConfig } from "./release-config.mjs?v=7.3-architecture";
+import { buildResultSheetViewModel } from "./result-sheet.mjs?v=7.3-architecture";
 import { collectUiRefs } from "./ui-refs.mjs?v=7.3-architecture";
-import {
-  issueSummaryText,
-  scoreSummaryText,
-  testMetricText,
-} from "./ui-formatters.mjs?v=7.3-architecture";
 import {
   renderExpertReviewList,
   renderFriendReviewList,
@@ -41,6 +37,7 @@ import {
   renderProductList as renderProductListView,
   renderProfileSummary as renderProfileSummaryView,
   renderRecommendationPanel,
+  renderResultSheet as renderResultSheetView,
   renderStylePlan as renderStylePlanView,
   renderTestRunList,
   renderValidationState as renderValidationStateView,
@@ -1317,79 +1314,38 @@ function renderResultSheet() {
   const profile = buildPreferenceProfile();
   const look = activeLook;
   const makeupPlan = currentMakeupPlan();
-  const feedbackSummary = summarizeFeedback(readFeedbackHistory());
-  const expertSummary = summarizeExpertReviews(readExpertReviews());
-  refs.resultMode.textContent = activeRecommendation?.source === "face" ? "脸部融合推荐" : "问卷推荐";
-  refs.resultLookName.textContent = look.name;
-  refs.resultReason.textContent = activeRecommendation?.reason ?? "等待推荐生成。";
-  refs.resultSwatches.innerHTML = [look.lip, look.blush, look.eye]
-    .map((color) => `<span style="background:${color}"></span>`)
-    .join("");
-  refs.resultProfile.innerHTML = `
-    <p>${profile.labels.join(" / ")}</p>
-    <p>${refs.profileSummary.innerText.replace(/\n/g, " ")}</p>
-  `;
-  refs.resultStylePlan.innerHTML = currentStyleItems()
-    .map(([title, body]) => `<article><strong>${title}</strong><span>${body}</span></article>`)
-    .join("");
-  refs.resultMakeupPlan.innerHTML = makeupPlan
-    .map((step) => {
-      const feedbackValue = latestMakeupStepFeedback(step.id)?.value ?? "";
-      return `
-        <article class="makeup-plan-card">
-          <div class="makeup-plan-card-head">
-            <i style="background:${step.color}"></i>
-            <strong>${step.category}</strong>
-            <span class="${step.visualPreview ? "is-previewed" : ""}">${step.visualPreview ? "已预览" : "方案建议"}</span>
-          </div>
-          <p>${step.recommendation}</p>
-          <small>${step.guidance}</small>
-          <em>注意：${step.caution}</em>
-          <label class="makeup-step-feedback">
-            <span>这一步反馈</span>
-            <select data-makeup-step-feedback="${step.id}" aria-label="${step.category}反馈">
-              <option value="">暂不评价</option>
-              <option value="suitable" ${feedbackValue === "suitable" ? "selected" : ""}>适合</option>
-              <option value="too_complex" ${feedbackValue === "too_complex" ? "selected" : ""}>太复杂</option>
-              <option value="skip" ${feedbackValue === "skip" ? "selected" : ""}>不想做</option>
-              <option value="wrong_color" ${feedbackValue === "wrong_color" ? "selected" : ""}>颜色不对</option>
-            </select>
-          </label>
-        </article>
-      `;
-    })
-    .join("");
-  refs.resultProducts.innerHTML = makeupPlan
-    .filter((step) => step.visualPreview)
-    .map(
-      (step) =>
-        `<article><i style="background:${step.color}"></i><strong>${step.category}</strong><span>${step.recommendation} / ${step.productDirection}</span></article>`
-    )
-    .join("");
-
-  const runs = readTestRuns();
-  refs.resultTests.innerHTML = runs.length
-    ? runs
-        .slice(0, 6)
-        .map(
-          (run) => `
-            <article>
-              <strong>${run.sampleLabel}</strong>
-              <span>${run.lookName} / ${testMetricText(run, { qualityGateLabels, defaultRenderVersion: renderVersion })}</span>
-              ${scoreSummaryText(run.scores, validationScoreLabels) ? `<span>${scoreSummaryText(run.scores, validationScoreLabels)}</span>` : ""}
-              ${issueSummaryText(run.issueTags, validationIssueLabels) ? `<span>${issueSummaryText(run.issueTags, validationIssueLabels)}</span>` : ""}
-            </article>
-          `
-        )
-        .join("")
-    : `<article><strong>暂无记录</strong><span>上传真实照片并记录样本后，这里会显示测试摘要。</span></article>`;
-
-  if (feedbackSummary.total) {
-    refs.resultTests.innerHTML += `<article><strong>反馈摘要</strong><span>${feedbackSummary.text}</span></article>`;
-  }
-  if (expertSummary.total) {
-    refs.resultTests.innerHTML += `<article><strong>专家评审</strong><span>${expertSummary.text}</span></article>`;
-  }
+  const viewModel = buildResultSheetViewModel({
+    recommendation: activeRecommendation,
+    look,
+    profileLabels: profile.labels,
+    profileSummaryText: refs.profileSummary.innerText,
+    styleItems: currentStyleItems(),
+    makeupPlan,
+    makeupFeedbackByStep: Object.fromEntries(
+      makeupPlan.map((step) => [step.id, latestMakeupStepFeedback(step.id)?.value ?? ""])
+    ),
+    testRuns: readTestRuns(),
+    feedbackSummary: summarizeFeedback(readFeedbackHistory()),
+    expertSummary: summarizeExpertReviews(readExpertReviews()),
+    qualityGateLabels,
+    defaultRenderVersion: renderVersion,
+    validationScoreLabels,
+    validationIssueLabels,
+  });
+  renderResultSheetView(
+    {
+      mode: refs.resultMode,
+      lookName: refs.resultLookName,
+      reason: refs.resultReason,
+      swatches: refs.resultSwatches,
+      profile: refs.resultProfile,
+      stylePlan: refs.resultStylePlan,
+      makeupPlan: refs.resultMakeupPlan,
+      products: refs.resultProducts,
+      tests: refs.resultTests,
+    },
+    viewModel
+  );
 }
 
 function shadeLabel(look) {

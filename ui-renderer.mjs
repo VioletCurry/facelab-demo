@@ -179,3 +179,71 @@ export function renderFriendReviewList(elements, reviews, labelOptions) {
   elements.count.textContent = `${reviews.length} 条`;
   elements.summary.innerHTML = friendReviewSummaryHtml(reviews, labelOptions);
 }
+
+export function renderResultSheet(elements, viewModel) {
+  elements.mode.textContent = viewModel.mode;
+  elements.lookName.textContent = viewModel.lookName;
+  elements.reason.textContent = viewModel.reason;
+  elements.swatches.innerHTML = viewModel.swatches
+    .map((color) => `<span style="background:${escapeHtml(color)}"></span>`)
+    .join("");
+  elements.profile.innerHTML = viewModel.profileLines
+    .map((line) => `<p>${escapeHtml(line)}</p>`)
+    .join("");
+  elements.stylePlan.innerHTML = viewModel.styleItems
+    .map(
+      ([title, body]) =>
+        `<article><strong>${escapeHtml(title)}</strong><span>${escapeHtml(body)}</span></article>`
+    )
+    .join("");
+  elements.makeupPlan.innerHTML = viewModel.makeupSteps
+    .map((step) => renderResultMakeupStep(step))
+    .join("");
+  elements.products.innerHTML = viewModel.products
+    .map(
+      (product) => `
+        <article>
+          <i style="background:${escapeHtml(product.color)}"></i>
+          <strong>${escapeHtml(product.category)}</strong>
+          <span>${escapeHtml(product.description)}</span>
+        </article>
+      `
+    )
+    .join("");
+  elements.tests.innerHTML = viewModel.tests
+    .map(
+      (test) => `
+        <article>
+          <strong>${escapeHtml(test.title)}</strong>
+          ${test.lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("")}
+        </article>
+      `
+    )
+    .join("");
+}
+
+function renderResultMakeupStep(step) {
+  const selected = (value) => (step.feedbackValue === value ? " selected" : "");
+  return `
+    <article class="makeup-plan-card">
+      <div class="makeup-plan-card-head">
+        <i style="background:${escapeHtml(step.color)}"></i>
+        <strong>${escapeHtml(step.category)}</strong>
+        <span class="${step.visualPreview ? "is-previewed" : ""}">${step.visualPreview ? "已预览" : "方案建议"}</span>
+      </div>
+      <p>${escapeHtml(step.recommendation)}</p>
+      <small>${escapeHtml(step.guidance)}</small>
+      <em>注意：${escapeHtml(step.caution)}</em>
+      <label class="makeup-step-feedback">
+        <span>这一步反馈</span>
+        <select data-makeup-step-feedback="${escapeHtml(step.id)}" aria-label="${escapeHtml(step.category)}反馈">
+          <option value="">暂不评价</option>
+          <option value="suitable"${selected("suitable")}>适合</option>
+          <option value="too_complex"${selected("too_complex")}>太复杂</option>
+          <option value="skip"${selected("skip")}>不想做</option>
+          <option value="wrong_color"${selected("wrong_color")}>颜色不对</option>
+        </select>
+      </label>
+    </article>
+  `;
+}
