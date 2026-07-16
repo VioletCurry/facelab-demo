@@ -5,6 +5,10 @@ import {
 } from "./render-policy.mjs?v=7.3-continuous-cheek";
 import { buildCompleteMakeupPlan } from "./makeup-plan.mjs";
 import { createCompatibleFaceLandmarker } from "./browser-runtime.mjs?v=7.3-architecture";
+import {
+  createMediaController,
+  describeCameraFailure,
+} from "./media-controller.mjs?v=7.3-architecture";
 import { createAppState } from "./app-state.mjs?v=7.3-architecture";
 import {
   buildLocalDataPayload,
@@ -396,10 +400,7 @@ let FilesetResolverClass;
 let pendingPhotoFile = null;
 let modelLoadNoticeTimer = null;
 let activeLook = { ...looks[0] };
-let photoImage = null;
-let lastVideoTime = -1;
 let lastResults = null;
-let rafId = null;
 let smoothedLandmarks = null;
 let lastQuality = 0;
 let lastLandmarkMotion = 0;
@@ -421,6 +422,13 @@ let preferenceState = {
   eyeFocus: "natural",
   lipTexture: "stain",
 };
+const mediaController = createMediaController({
+  appState,
+  video: refs.video,
+  getFaceLandmarker: () => faceLandmarker,
+  onCameraFrame: renderCameraFrame,
+  onPhotoFrame: renderPhotoFrame,
+});
 
 document.body.classList.toggle("developer-mode", developerMode);
 
@@ -616,10 +624,9 @@ function enterTryOn() {
 }
 
 function showIntake() {
-  stopLoop();
-  stopCameraTracks();
+  mediaController.stop();
+  mediaController.clearPhoto();
   appState.update({ mode: "idle" });
-  photoImage = null;
   lastResults = null;
   lastProfileSignals = null;
   refs.emptyState.classList.remove("hidden");
@@ -680,35 +687,22 @@ async function startCamera() {
     return;
   }
 
-  stopLoop();
   resetSmoothing();
-  appState.update({ mode: "camera" });
-  photoImage = null;
   refs.emptyState.classList.add("hidden");
   refs.downloadLink.classList.remove("ready");
   setStatus("idle", "请求权限");
   setInputGuidance("idle", "请把脸放在画面中央，面向镜头，并保持正面柔光。");
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: "user",
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-      },
-      audio: false,
-    });
-
-    refs.video.srcObject = stream;
-    await refs.video.play();
-    appState.update({ running: true });
+    const result = await mediaController.startCamera();
+    if (!result.started) return;
     setStatus("idle", "寻找人脸");
     setInputGuidance("idle", "正在寻找人脸。请靠近一点，让脸部完整进入画面。");
-    rafId = requestAnimationFrame(loopCamera);
   } catch (error) {
     console.error(error);
-    setStatus("error", "摄像头不可用");
-    setInputGuidance("error", "摄像头不可用。可以改用上传照片继续测试。");
+    const failure = describeCameraFailure(error);
+    setStatus("error", failure.status);
+    setInputGuidance("error", failure.guidance);
     refs.emptyState.classList.remove("hidden");
   }
 }
@@ -737,74 +731,45 @@ async function handlePhotoUpload(event) {
 }
 
 async function processPhotoFile(file) {
-
-  const objectUrl = URL.createObjectURL(file);
   try {
-    await loadPhotoSource(objectUrl);
+    preparePhotoInput();
+    await mediaController.loadPhotoFile(file);
   } catch (error) {
     console.error(error);
     setStatus("error", "照片读取失败");
     setInputGuidance("error", "无法读取这张照片，请换一张 JPG、PNG 或 HEIC 照片重试。");
-  } finally {
-    URL.revokeObjectURL(objectUrl);
   }
 }
 
 async function loadPhotoSource(source) {
   if (!faceLandmarker) return;
+  preparePhotoInput();
+  return mediaController.loadPhotoSource(source);
+}
 
-  stopCameraTracks();
-  stopLoop();
+function preparePhotoInput() {
   resetSmoothing();
-  appState.update({ mode: "photo" });
   refs.emptyState.classList.add("hidden");
   refs.downloadLink.classList.remove("ready");
   setStatus("idle", "分析照片");
   setInputGuidance("idle", "正在分析照片。请优先使用单人正脸、脸部完整、光线均匀的图片。");
-
-  await new Promise((resolve, reject) => {
-    const image = new Image();
-    image.decoding = "async";
-    image.onload = async () => {
-      try {
-        photoImage = image;
-        await drawPhotoFrame();
-        resolve();
-      } catch (error) {
-        reject(error);
-      }
-    };
-    image.onerror = () => reject(new Error("Photo could not be loaded"));
-    image.src = source;
-  });
 }
 
-function loopCamera() {
-  if (!appState.getState().running || appState.getState().mode !== "camera") return;
-
-  const video = refs.video;
-  if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-    resizeCanvas(video.videoWidth, video.videoHeight);
-    drawVideoMirrored(video);
-
-    if (video.currentTime !== lastVideoTime) {
-      lastVideoTime = video.currentTime;
-      lastResults = faceLandmarker.detectForVideo(video, performance.now());
-    }
-
-    drawMakeup(lastResults, true);
-  }
-
-  rafId = requestAnimationFrame(loopCamera);
+function renderCameraFrame({ video, results }) {
+  resizeCanvas(video.videoWidth, video.videoHeight);
+  drawVideoMirrored(video);
+  lastResults = results;
+  drawMakeup(lastResults, true);
 }
 
 async function drawPhotoFrame() {
-  if (!photoImage) return;
+  return mediaController.redrawPhoto();
+}
 
-  resizeCanvas(photoImage.naturalWidth, photoImage.naturalHeight);
-  ctx.drawImage(photoImage, 0, 0, refs.canvas.width, refs.canvas.height);
-
-  lastResults = await detectPhoto(photoImage);
+function renderPhotoFrame({ image, results }) {
+  resizeCanvas(image.naturalWidth, image.naturalHeight);
+  ctx.drawImage(image, 0, 0, refs.canvas.width, refs.canvas.height);
+  lastResults = results;
   drawMakeup(lastResults, false);
 
   if (lastResults.faceLandmarks?.length) {
@@ -817,13 +782,6 @@ async function drawPhotoFrame() {
     setStatus("error", "未识别人脸");
     setInputGuidance("error", "没有识别人脸。请换成单人正脸照片，并避免遮挡、侧脸或多人合照。");
   }
-}
-
-async function detectPhoto(image) {
-  await faceLandmarker.setOptions({ runningMode: "IMAGE" });
-  const result = faceLandmarker.detect(image);
-  await faceLandmarker.setOptions({ runningMode: "VIDEO" });
-  return result;
 }
 
 function drawVideoMirrored(video) {
@@ -1819,18 +1777,4 @@ function captureCanvas() {
     refs.downloadLink.href = url;
     refs.downloadLink.classList.add("ready");
   }, "image/png");
-}
-
-function stopLoop() {
-  appState.update({ running: false });
-  if (rafId) cancelAnimationFrame(rafId);
-  rafId = null;
-}
-
-function stopCameraTracks() {
-  const stream = refs.video.srcObject;
-  if (stream) {
-    stream.getTracks().forEach((track) => track.stop());
-  }
-  refs.video.srcObject = null;
 }
