@@ -5,6 +5,18 @@ import {
 } from "./render-policy.mjs?v=7.3-continuous-cheek";
 import { buildCompleteMakeupPlan } from "./makeup-plan.mjs";
 import { createCompatibleFaceLandmarker } from "./browser-runtime.mjs?v=7.3-architecture";
+import { createAppState } from "./app-state.mjs?v=7.3-architecture";
+import {
+  buildLocalDataPayload,
+  buildRecommendationResultPayload,
+} from "./export-data.mjs?v=7.3-architecture";
+import {
+  estimateFaceQuality,
+  landmarkToCanvas,
+  measureFacePose,
+  realtimeMakeupMultiplier,
+  smoothFaceLandmarks,
+} from "./face-analysis.mjs?v=7.3-architecture";
 import {
   average,
   clamp,
@@ -14,7 +26,15 @@ import {
 import { neutralTone } from "./render/color.mjs?v=7.3-architecture";
 import { clearStores, createArrayStore, createObjectStore } from "./persistence.mjs?v=7.3-architecture";
 import { releaseConfig } from "./release-config.mjs?v=7.3-architecture";
+import { collectUiRefs } from "./ui-refs.mjs?v=7.3-architecture";
 import { createMakeupRenderer, makeupSideVisibility } from "./makeup-renderer.mjs?v=7.3-architecture";
+import {
+  buildReviewRows,
+  feedbackLabel,
+  summarizeExpertReviews,
+  summarizeFeedback,
+  toCsv,
+} from "./review-data.mjs?v=7.3-architecture";
 import {
   PREFERENCE_PRESETS as preferencePresets,
   budgetHint as budgetHintPure,
@@ -349,118 +369,22 @@ const looks = [
   },
 ];
 
-const refs = {
-  appShell: document.querySelector("#appShell"),
-  intakeScreen: document.querySelector("#intakeScreen"),
-  intakeContinueBtn: document.querySelector("#intakeContinueBtn"),
-  privacyConsent: document.querySelector("#privacyConsent"),
-  consentError: document.querySelector("#consentError"),
-  intakePreviewCard: document.querySelector("#intakePreviewCard"),
-  intakePreviewState: document.querySelector("#intakePreviewState"),
-  intakePreviewTitle: document.querySelector("#intakePreviewTitle"),
-  intakePreviewReason: document.querySelector("#intakePreviewReason"),
-  intakePreviewChips: document.querySelector("#intakePreviewChips"),
-  intakePreviewSwatches: document.querySelector("#intakePreviewSwatches"),
-  video: document.querySelector("#camera"),
-  canvas: document.querySelector("#preview"),
-  statusPill: document.querySelector("#statusPill"),
-  statusText: document.querySelector("#statusPill strong"),
-  emptyState: document.querySelector("#emptyState"),
-  runtimeLabel: document.querySelector("#runtimeLabel"),
-  startCameraBtn: document.querySelector("#startCameraBtn"),
-  photoInput: document.querySelector("#photoInput"),
-  inputGuidance: document.querySelector("#inputGuidance"),
-  sampleButtons: document.querySelectorAll("[data-sample]"),
-  recordTestBtn: document.querySelector("#recordTestBtn"),
-  testNoteInput: document.querySelector("#testNoteInput"),
-  testRunCount: document.querySelector("#testRunCount"),
-  testRunList: document.querySelector("#testRunList"),
-  qualityGateLabel: document.querySelector("#qualityGateLabel"),
-  renderVersionLabel: document.querySelector("#renderVersionLabel"),
-  validationScoreInputs: document.querySelectorAll("[data-validation-score]"),
-  validationIssueButtons: document.querySelectorAll("[data-validation-issue]"),
-  expertButtons: document.querySelectorAll("[data-expert-rating]"),
-  recordExpertBtn: document.querySelector("#recordExpertBtn"),
-  expertNoteInput: document.querySelector("#expertNoteInput"),
-  expertReviewCount: document.querySelector("#expertReviewCount"),
-  expertReviewList: document.querySelector("#expertReviewList"),
-  friendReviewCount: document.querySelector("#friendReviewCount"),
-  friendReviewSummary: document.querySelector("#friendReviewSummary"),
-  preferenceInputs: document.querySelectorAll("[data-pref]"),
-  preferenceSummaryChips: document.querySelector("#preferenceSummaryChips"),
-  editPreferencesBtn: document.querySelector("#editPreferencesBtn"),
-  profileState: document.querySelector("#profileState"),
-  profileSummary: document.querySelector("#profileSummary"),
-  recommendationState: document.querySelector("#recommendationState"),
-  recommendationTitle: document.querySelector("#recommendationTitle"),
-  recommendationReason: document.querySelector("#recommendationReason"),
-  recommendationConfidence: document.querySelector("#recommendationConfidence"),
-  recommendationChips: document.querySelector("#recommendationChips"),
-  applyRecommendationBtn: document.querySelector("#applyRecommendationBtn"),
-  lookGrid: document.querySelector("#lookGrid"),
-  lookName: document.querySelector("#lookName"),
-  stylePlan: document.querySelector("#stylePlan"),
-  makeupPlanSummary: document.querySelector("#makeupPlanSummary"),
-  productList: document.querySelector("#productList"),
-  productBudgetLabel: document.querySelector("#productBudgetLabel"),
-  lipIntensity: document.querySelector("#lipIntensity"),
-  blushIntensity: document.querySelector("#blushIntensity"),
-  eyeIntensity: document.querySelector("#eyeIntensity"),
-  lipValue: document.querySelector("#lipValue"),
-  blushValue: document.querySelector("#blushValue"),
-  eyeValue: document.querySelector("#eyeValue"),
-  lipColor: document.querySelector("#lipColor"),
-  blushColor: document.querySelector("#blushColor"),
-  eyeColor: document.querySelector("#eyeColor"),
-  beforeToggle: document.querySelector("#beforeToggle"),
-  qualityLabel: document.querySelector("#qualityLabel"),
-  captureBtn: document.querySelector("#captureBtn"),
-  openResultBtn: document.querySelector("#openResultBtn"),
-  closeResultBtn: document.querySelector("#closeResultBtn"),
-  exportDataBtn: document.querySelector("#exportDataBtn"),
-  exportCsvBtn: document.querySelector("#exportCsvBtn"),
-  resultSheet: document.querySelector("#resultSheet"),
-  resultMode: document.querySelector("#resultMode"),
-  resultLookName: document.querySelector("#resultLookName"),
-  resultReason: document.querySelector("#resultReason"),
-  resultSwatches: document.querySelector("#resultSwatches"),
-  resultProfile: document.querySelector("#resultProfile"),
-  resultStylePlan: document.querySelector("#resultStylePlan"),
-  resultMakeupPlan: document.querySelector("#resultMakeupPlan"),
-  resultProducts: document.querySelector("#resultProducts"),
-  resultTests: document.querySelector("#resultTests"),
-  clearDataBtn: document.querySelector("#clearDataBtn"),
-  downloadLink: document.querySelector("#downloadLink"),
-  dataDownloadLink: document.querySelector("#dataDownloadLink"),
-  csvDownloadLink: document.querySelector("#csvDownloadLink"),
-  feedbackState: document.querySelector("#feedbackState"),
-  feedbackNoteInput: document.querySelector("#feedbackNoteInput"),
-  feedbackButtons: document.querySelectorAll("[data-feedback]"),
-  friendPrivacyComfort: document.querySelector("#friendPrivacyComfort"),
-  friendFitScore: document.querySelector("#friendFitScore"),
-  friendNaturalnessScore: document.querySelector("#friendNaturalnessScore"),
-  friendReuseIntent: document.querySelector("#friendReuseIntent"),
-  friendReviewNoteInput: document.querySelector("#friendReviewNoteInput"),
-  recordFriendReviewBtn: document.querySelector("#recordFriendReviewBtn"),
-};
+const refs = collectUiRefs(document);
 
 const ctx = refs.canvas.getContext("2d", { alpha: false });
 const makeupRenderer = createMakeupRenderer({ ctx, canvas: refs.canvas });
+const appState = createAppState();
 
 let faceLandmarker;
 let FaceLandmarkerClass;
 let FilesetResolverClass;
-let modelState = "loading";
 let pendingPhotoFile = null;
 let modelLoadNoticeTimer = null;
 let activeLook = { ...looks[0] };
-let running = false;
-let mode = "idle";
 let photoImage = null;
 let lastVideoTime = -1;
 let lastResults = null;
 let rafId = null;
-let beautyEnabled = true;
 let smoothedLandmarks = null;
 let lastQuality = 0;
 let lastLandmarkMotion = 0;
@@ -504,7 +428,7 @@ async function init() {
   setStatus("idle", "加载模型");
   setInputGuidance("idle", "上传清晰单人正脸照片，或开启摄像头后让脸部保持在画面中央。");
   modelLoadNoticeTimer = window.setTimeout(() => {
-    if (modelState !== "loading") return;
+    if (appState.getState().modelState !== "loading") return;
     refs.runtimeLabel.textContent = "首次加载较慢";
     setStatus("idle", pendingPhotoFile ? "照片已选择" : "正在加载模型");
     setInputGuidance(
@@ -535,7 +459,7 @@ async function init() {
       },
     });
     faceLandmarker = compatibleRuntime.landmarker;
-    modelState = "ready";
+    appState.update({ modelState: "ready" });
     window.clearTimeout(modelLoadNoticeTimer);
     refs.runtimeLabel.textContent =
       compatibleRuntime.delegate === "CPU" ? "模型已就绪（兼容）" : "模型已就绪";
@@ -547,7 +471,7 @@ async function init() {
     }
   } catch (error) {
     console.error(error);
-    modelState = "failed";
+    appState.update({ modelState: "failed" });
     pendingPhotoFile = null;
     window.clearTimeout(modelLoadNoticeTimer);
     refs.runtimeLabel.textContent = "模型加载失败";
@@ -632,9 +556,9 @@ function bindControls() {
       updateProfileSummary(lastProfileSignals);
       renderPersonalizationPanels();
       if (refs.privacyConsent.checked) savePreferenceState();
-      if (mode === "photo") {
+      if (appState.getState().mode === "photo") {
         drawPhotoFrame();
-      } else if (lastResults?.faceLandmarks?.length && mode === "camera") {
+      } else if (lastResults?.faceLandmarks?.length && appState.getState().mode === "camera") {
         drawMakeup(lastResults, true);
       } else {
         activeRecommendation = recommendFromPreferences();
@@ -651,8 +575,8 @@ function bindControls() {
   refs.blushColor.addEventListener("input", () => updateColor("blush", refs.blushColor.value));
   refs.eyeColor.addEventListener("input", () => updateColor("eye", refs.eyeColor.value));
   refs.beforeToggle.addEventListener("change", () => {
-    beautyEnabled = refs.beforeToggle.checked;
-    if (mode === "photo") drawPhotoFrame();
+    appState.update({ beautyEnabled: refs.beforeToggle.checked });
+    if (appState.getState().mode === "photo") drawPhotoFrame();
   });
 }
 
@@ -679,7 +603,7 @@ function enterTryOn() {
 function showIntake() {
   stopLoop();
   stopCameraTracks();
-  mode = "idle";
+  appState.update({ mode: "idle" });
   photoImage = null;
   lastResults = null;
   lastProfileSignals = null;
@@ -698,13 +622,13 @@ function bindRange(input, output, key) {
   input.addEventListener("input", () => {
     activeLook[key] = Number(input.value);
     output.value = Math.round(Number(input.value) * 100);
-    if (mode === "photo") drawPhotoFrame();
+    if (appState.getState().mode === "photo") drawPhotoFrame();
   });
 }
 
 function updateColor(key, value) {
   activeLook[key] = value;
-  if (mode === "photo") drawPhotoFrame();
+  if (appState.getState().mode === "photo") drawPhotoFrame();
 }
 
 function setLook(look) {
@@ -725,12 +649,12 @@ function setLook(look) {
   });
 
   renderPersonalizationPanels();
-  if (mode === "photo") drawPhotoFrame();
+  if (appState.getState().mode === "photo") drawPhotoFrame();
 }
 
 async function startCamera() {
   if (!faceLandmarker) {
-    const failed = modelState === "failed";
+    const failed = appState.getState().modelState === "failed";
     setStatus(failed ? "error" : "idle", failed ? "模型加载失败" : "模型加载中");
     setInputGuidance(
       failed ? "error" : "idle",
@@ -743,7 +667,7 @@ async function startCamera() {
 
   stopLoop();
   resetSmoothing();
-  mode = "camera";
+  appState.update({ mode: "camera" });
   photoImage = null;
   refs.emptyState.classList.add("hidden");
   refs.downloadLink.classList.remove("ready");
@@ -762,7 +686,7 @@ async function startCamera() {
 
     refs.video.srcObject = stream;
     await refs.video.play();
-    running = true;
+    appState.update({ running: true });
     setStatus("idle", "寻找人脸");
     setInputGuidance("idle", "正在寻找人脸。请靠近一点，让脸部完整进入画面。");
     rafId = requestAnimationFrame(loopCamera);
@@ -780,7 +704,7 @@ async function handlePhotoUpload(event) {
   if (!file) return;
 
   if (!faceLandmarker) {
-    if (modelState === "failed") {
+    if (appState.getState().modelState === "failed") {
       setStatus("error", "模型加载失败");
       setInputGuidance("error", "照片未处理。请用 Safari 打开此页面并刷新后重试。");
       return;
@@ -817,7 +741,7 @@ async function loadPhotoSource(source) {
   stopCameraTracks();
   stopLoop();
   resetSmoothing();
-  mode = "photo";
+  appState.update({ mode: "photo" });
   refs.emptyState.classList.add("hidden");
   refs.downloadLink.classList.remove("ready");
   setStatus("idle", "分析照片");
@@ -841,7 +765,7 @@ async function loadPhotoSource(source) {
 }
 
 function loopCamera() {
-  if (!running || mode !== "camera") return;
+  if (!appState.getState().running || appState.getState().mode !== "camera") return;
 
   const video = refs.video;
   if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
@@ -903,11 +827,11 @@ function drawMakeup(results, mirrored) {
       status: "no-face",
       reason: "face-not-detected",
     };
-    if (mode === "camera") setStatus("idle", "寻找人脸");
+    if (appState.getState().mode === "camera") setStatus("idle", "寻找人脸");
     refs.qualityLabel.textContent = "未识别人脸";
     setInputGuidance(
-      mode === "camera" ? "idle" : "error",
-      mode === "camera"
+      appState.getState().mode === "camera" ? "idle" : "error",
+      appState.getState().mode === "camera"
         ? "请把脸放在画面中央，面向镜头，并增加正面光线。"
         : "没有识别人脸。请换成单人正脸照片，并避免遮挡、侧脸或多人合照。"
     );
@@ -917,7 +841,7 @@ function drawMakeup(results, mirrored) {
     renderPersonalizationPanels();
     const fallbackRecommendation = recommendFromPreferences();
     activeRecommendation =
-      mode === "idle"
+      appState.getState().mode === "idle"
         ? fallbackRecommendation
         : {
             ...fallbackRecommendation,
@@ -930,13 +854,14 @@ function drawMakeup(results, mirrored) {
     return;
   }
 
-  const landmarks = mode === "camera" ? smoothLandmarks(rawLandmarks) : rawLandmarks;
-  const pose = measureFacePose(landmarks, mirrored);
-  const quality = estimateFaceQuality(landmarks, mirrored, pose);
+  const landmarks = appState.getState().mode === "camera" ? smoothLandmarks(rawLandmarks) : rawLandmarks;
+  const canvasSize = { width: refs.canvas.width, height: refs.canvas.height };
+  const pose = measureFacePose({ landmarks, mirrored, canvasSize });
+  const quality = estimateFaceQuality({ landmarks, mirrored, canvasSize, pose });
   const faceTone = sampleToneFromIndices(landmarks, mirrored, [10, 1, 50, 280, 234, 454, 152], 26);
   const renderDiagnostics = {
     version: renderVersion,
-    status: beautyEnabled ? "ready" : "before-mode",
+    status: appState.getState().beautyEnabled ? "ready" : "before-mode",
     pose: {
       yaw: Number(pose.yaw.toFixed(3)),
       mouthOpen: Number(pose.mouthOpen.toFixed(3)),
@@ -979,9 +904,15 @@ function drawMakeup(results, mirrored) {
   );
   refs.emptyState.classList.add("hidden");
 
-  if (!beautyEnabled) return;
+  if (!appState.getState().beautyEnabled) return;
 
-  const makeupOpacity = clamp(mapRange(quality, 0.28, 0.72, 0.74, 1), 0.72, 1) * realtimeMakeupMultiplier(pose);
+  const makeupOpacity =
+    clamp(mapRange(quality, 0.28, 0.72, 0.74, 1), 0.72, 1) *
+    realtimeMakeupMultiplier({
+      mode: appState.getState().mode,
+      landmarkMotion: lastLandmarkMotion,
+      pose,
+    });
   renderDiagnostics.parameters.makeupOpacity = Number(makeupOpacity.toFixed(3));
   renderDiagnostics.parameters.landmarkMotion = Number(lastLandmarkMotion.toFixed(4));
   makeupRenderer.renderMakeupLayers({
@@ -992,41 +923,19 @@ function drawMakeup(results, mirrored) {
     diagnostics: renderDiagnostics,
     look: activeLook,
     preferences: preferenceState,
-    mode,
+    mode: appState.getState().mode,
     flags: { lipTextureExperimentEnabled, blushPlacementExperimentEnabled },
   });
 }
 
 function smoothLandmarks(rawLandmarks) {
-  if (!smoothedLandmarks || smoothedLandmarks.length !== rawLandmarks.length) {
-    smoothedLandmarks = rawLandmarks.map((landmark) => ({ ...landmark }));
-    lastLandmarkMotion = 0;
-    return smoothedLandmarks;
-  }
-
-  const anchorIndices = [1, 33, 263, 61, 291, 152];
-  const faceWidth = Math.max(
-    0.001,
-    Math.hypot(rawLandmarks[234].x - rawLandmarks[454].x, rawLandmarks[234].y - rawLandmarks[454].y)
-  );
-  const motion = average(
-    anchorIndices.map((index) => {
-      const previous = smoothedLandmarks[index] ?? rawLandmarks[index];
-      const current = rawLandmarks[index];
-      return Math.hypot(previous.x - current.x, previous.y - current.y) / faceWidth;
-    })
-  );
-  lastLandmarkMotion = motion;
-  const smoothing = motion > 0.022 ? 0.5 : lastQuality < 0.55 ? 0.74 : 0.68;
-
-  smoothedLandmarks = rawLandmarks.map((landmark, index) => {
-    const previous = smoothedLandmarks[index] ?? landmark;
-    return {
-      x: previous.x * smoothing + landmark.x * (1 - smoothing),
-      y: previous.y * smoothing + landmark.y * (1 - smoothing),
-      z: (previous.z ?? 0) * smoothing + (landmark.z ?? 0) * (1 - smoothing),
-    };
+  const smoothed = smoothFaceLandmarks({
+    rawLandmarks,
+    previousLandmarks: smoothedLandmarks,
+    lastQuality,
   });
+  smoothedLandmarks = smoothed.landmarks;
+  lastLandmarkMotion = smoothed.motion;
   return smoothedLandmarks;
 }
 
@@ -1036,52 +945,15 @@ function resetSmoothing() {
   lastLandmarkMotion = 0;
 }
 
-function realtimeMakeupMultiplier(pose) {
-  if (mode !== "camera") return 1;
-  const movementComfort = clamp(mapRange(lastLandmarkMotion, 0.004, 0.038, 1, 0.56), 0.56, 1);
-  const poseComfort = clamp(mapRange(Math.max(pose.yaw ?? 0, pose.mouthOpen ?? 0), 0.04, 0.24, 1, 0.72), 0.72, 1);
-  return clamp(0.8 * movementComfort * poseComfort, 0.42, 0.8);
-}
-
-function measureFacePose(landmarks, mirrored) {
-  const leftCheek = point(landmarks[234], mirrored);
-  const rightCheek = point(landmarks[454], mirrored);
-  const nose = point(landmarks[1] ?? landmarks[4], mirrored);
-  const faceWidth = Math.max(1, distance(leftCheek, rightCheek));
-  const centerX = (leftCheek.x + rightCheek.x) / 2;
-  const mouthWidth = Math.max(1, distance(point(landmarks[61], mirrored), point(landmarks[291], mirrored)));
-  const mouthOpen = distance(point(landmarks[13], mirrored), point(landmarks[14], mirrored)) / mouthWidth;
-  const leftVisibility = distance(nose, leftCheek) / faceWidth;
-  const rightVisibility = distance(nose, rightCheek) / faceWidth;
-  return {
-    yaw: Math.abs(nose.x - centerX) / faceWidth,
-    mouthOpen,
-    visibleSide: leftVisibility >= rightVisibility ? "left" : "right",
-  };
-}
-
-function estimateFaceQuality(landmarks, mirrored, pose = measureFacePose(landmarks, mirrored)) {
-  const leftCheek = point(landmarks[234], mirrored);
-  const rightCheek = point(landmarks[454], mirrored);
-  const chin = point(landmarks[152], mirrored);
-  const forehead = point(landmarks[10], mirrored);
-  const faceWidth = Math.max(1, distance(leftCheek, rightCheek));
-  const faceHeight = Math.max(1, distance(chin, forehead));
-  const sizeScore = clamp(faceWidth / (refs.canvas.width * 0.22), 0, 1);
-  const proportionScore = clamp(faceHeight / faceWidth / 1.15, 0, 1);
-  const yawScore = clamp(1 - mapRange(pose.yaw, 0.04, 0.22, 0, 0.72), 0.28, 1);
-  return clamp(sizeScore * 0.4 + proportionScore * 0.2 + yawScore * 0.4, 0, 1);
-}
-
 function updateQualityLabel(quality, faceTone, pose) {
-  if (!beautyEnabled) {
+  if (!appState.getState().beautyEnabled) {
     refs.qualityLabel.textContent = "Before 模式";
     return;
   }
   refs.qualityLabel.textContent = guidanceForFace(quality, faceTone, pose).label;
 }
 
-function recommendLook(landmarks, mirrored, quality, faceTone, pose = measureFacePose(landmarks, mirrored)) {
+function recommendLook(landmarks, mirrored, quality, faceTone, pose) {
   const preferenceProfile = buildPreferenceProfile();
   const leftCheek = point(landmarks[234], mirrored);
   const rightCheek = point(landmarks[454], mirrored);
@@ -1791,53 +1663,14 @@ function recordMakeupStepFeedback(stepId, value) {
     : `${planStep.category}反馈已清除`;
 }
 
-function feedbackLabel(type) {
-  const labels = {
-    like: "喜欢",
-    dislike: "不喜欢",
-    lighter: "太浓",
-    stronger: "太淡",
-    "wrong-color": "色不对",
-    "wrong-style": "风格不对",
-    switch: "换风格",
-  };
-  return labels[type] ?? "其他";
-}
-
 function feedbackSignals() {
   const tone = lastProfileSignals?.faceTone;
   return {
     quality: lastProfileSignals ? Number(lastProfileSignals.quality.toFixed(3)) : null,
     luminance: tone ? Number(tone.luminance.toFixed(3)) : null,
     warmth: tone ? Number(tone.warmth.toFixed(3)) : null,
-    mode,
+    mode: appState.getState().mode,
   };
-}
-
-function summarizeFeedback(history) {
-  if (!history.length) return { total: 0, text: "暂无反馈" };
-  const counts = history.reduce((acc, item) => {
-    const label = item.label ?? feedbackLabel(item.type);
-    acc[label] = (acc[label] ?? 0) + 1;
-    return acc;
-  }, {});
-  const text = Object.entries(counts)
-    .map(([label, count]) => `${label} ${count}`)
-    .join(" / ");
-  return { total: history.length, text };
-}
-
-function summarizeExpertReviews(reviews) {
-  if (!reviews.length) return { total: 0, text: "暂无专家评审" };
-  const counts = reviews.reduce((acc, item) => {
-    const label = item.ratingLabel ?? expertRatingLabels[item.rating] ?? "其他";
-    acc[label] = (acc[label] ?? 0) + 1;
-    return acc;
-  }, {});
-  const text = Object.entries(counts)
-    .map(([label, count]) => `${label} ${count}`)
-    .join(" / ");
-  return { total: reviews.length, text };
 }
 
 function exportLocalData() {
@@ -1855,345 +1688,67 @@ function buildRecommendationResultExport() {
   const quality = lastProfileSignals?.quality ?? 0;
   const makeupPlan = currentMakeupPlan();
   const styleItems = Object.fromEntries(currentStyleItems());
-  const planStep = (id) => makeupPlan.find((step) => step.id === id)?.recommendation ?? "";
-  return {
-    schemaVersion: 1,
+  return buildRecommendationResultPayload({
     createdAt: new Date().toISOString(),
-    intake: { ...preferenceState },
+    intake: preferenceState,
     faceSignals: {
-      quality: Number(quality.toFixed(3)),
-      luminance: Number((tone.luminance ?? 0.56).toFixed(3)),
-      warmth: Number((tone.warmth ?? 0.18).toFixed(3)),
-      qualityTier: gate.id,
-      notes: lastProfileSignals?.guidance?.summary ? [lastProfileSignals.guidance.summary] : [],
+      quality,
+      luminance: tone.luminance ?? 0.56,
+      warmth: tone.warmth ?? 0.18,
+      summary: lastProfileSignals?.guidance?.summary ?? "",
     },
-    qualityGate: gate.id,
-    recommendation: {
-      lookId: activeRecommendation?.lookId ?? activeLook.id,
-      lookName: activeRecommendation?.lookName ?? activeLook.name,
-      source: activeRecommendation?.source === "face" ? "face_fusion" : "questionnaire",
-      confidenceBand: confidenceBand(activeRecommendation?.confidence),
-      reason: activeRecommendation?.reason ?? preferenceRecommendationReason(activeLook, buildPreferenceProfile()),
-      caveat: gate.id === "good_for_tryon" ? "" : gate.label,
-    },
-    makeupPlan: {
-      base: planStep("base"),
-      concealer: planStep("concealer"),
-      brows: planStep("brows"),
-      eyeliner: planStep("eyeliner"),
-      lashes: planStep("lashes"),
-      eye: planStep("eye"),
-      blush: planStep("blush"),
-      highlightContour: planStep("highlightContour"),
-      setting: planStep("setting"),
-      lip: planStep("lip"),
-      steps: makeupPlan.map((step) => ({
-        id: step.id,
-        category: step.category,
-        recommendation: step.recommendation,
-        guidance: step.guidance,
-        caution: step.caution,
-        productDirection: step.productDirection,
-        visualPreview: step.visualPreview,
-      })),
-    },
-    stylePlan: {
-      hair: styleItems["发型"] ?? "",
-      outfitPalette: String(styleItems["穿搭色"] ?? "")
-        .split(/[、,/]/)
-        .map((item) => item.trim())
-        .filter(Boolean),
-      productCategories: makeupPlan.map((step) => ({
-        category: step.category,
-        guidance: `${step.recommendation} / ${step.productDirection}`,
-        budgetTier: preferenceState.budget,
-      })),
-    },
-    validation: {
-      sampleLabel: sampleScenarios[activeSampleScenario],
-      renderVersion,
-      issueTags: selectedValidationIssues(),
-      scores: selectedValidationScores(),
-      reviewNote: refs.testNoteInput.value.trim(),
-    },
-    makeupStepFeedback: readMakeupStepFeedback().map((item) => ({
-      stepId: item.stepId,
-      stepLabel: item.stepLabel,
-      value: item.value,
-      label: item.label,
-      lookId: item.lookId,
-      lookName: item.lookName,
-      intake: item.preferences,
-      createdAt: item.at,
-    })),
-  };
-}
-
-function confidenceBand(confidence) {
-  if (confidence >= 84) return "high";
-  if (confidence >= 70) return "medium";
-  return "low";
+    qualityGate: gate,
+    recommendation: activeRecommendation,
+    activeLook,
+    fallbackReason: preferenceRecommendationReason(activeLook, buildPreferenceProfile()),
+    makeupPlan,
+    styleItems,
+    sampleLabel: sampleScenarios[activeSampleScenario],
+    renderVersion,
+    issueTags: selectedValidationIssues(),
+    scores: selectedValidationScores(),
+    reviewNote: refs.testNoteInput.value.trim(),
+    makeupStepFeedback: readMakeupStepFeedback(),
+  });
 }
 
 function buildLocalDataExport() {
   const profile = buildPreferenceProfile();
-  return {
-    schemaVersion: 1,
+  return buildLocalDataPayload({
     exportedAt: new Date().toISOString(),
-    privacy: {
-      includesImages: false,
-      includesVideoFrames: false,
-      source: "browser-local-summary",
-    },
-    validationMode: {
-      renderVersion,
-      qualityGate: currentQualityGate(),
-      recommendationSchema: "schemas/recommendation-result.schema.json",
-    },
-    preferences: { ...preferenceState, labels: profile.labels },
-    activeLook: {
-      id: activeLook.id,
-      name: activeLook.name,
-      scene: activeLook.scene,
-      colors: {
-        lip: activeLook.lip,
-        blush: activeLook.blush,
-        eye: activeLook.eye,
-      },
-      intensity: {
-        lip: activeLook.lipIntensity,
-        blush: activeLook.blushIntensity,
-        eye: activeLook.eyeIntensity,
-      },
-    },
+    renderVersion,
+    qualityGate: currentQualityGate(),
+    preferences: preferenceState,
+    preferenceLabels: profile.labels,
+    activeLook,
     recommendation: activeRecommendation,
     recommendationResult: buildRecommendationResultExport(),
-    stylePlan: currentStyleItems().map(([title, body]) => ({ title, body })),
+    stylePlan: currentStyleItems(),
     products: currentProducts(),
     testRuns: readTestRuns(),
     feedback: readFeedbackHistory(),
     friendReviews: readFriendReviews(),
     makeupStepFeedback: readMakeupStepFeedback(),
     expertReviews: readExpertReviews(),
-  };
+  });
 }
 
 function exportReviewCsv() {
-  const csv = toCsv(buildReviewCsvRows());
+  const csv = toCsv(
+    buildReviewRows({
+      feedback: readFeedbackHistory(),
+      testRuns: readTestRuns(),
+      makeupStepFeedback: readMakeupStepFeedback(),
+      friendReviews: readFriendReviews(),
+      expertReviews: readExpertReviews(),
+      expertRatingLabels,
+    })
+  );
   const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
   if (refs.csvDownloadLink.href) URL.revokeObjectURL(refs.csvDownloadLink.href);
   refs.csvDownloadLink.href = URL.createObjectURL(blob);
   refs.csvDownloadLink.classList.add("ready");
   refs.feedbackState.textContent = "评审 CSV 已准备";
-}
-
-function buildReviewCsvRows() {
-  const feedbackRows = readFeedbackHistory().map((item) => ({
-    recordType: "user_feedback",
-    recordId: "",
-    createdAt: item.at,
-    label: item.label ?? feedbackLabel(item.type),
-    sampleLabel: "",
-    lookName: item.lookName,
-    recommendationSource: item.recommendationSource,
-    recommendationConfidence: item.recommendationConfidence,
-    occasion: item.preferences?.occasion,
-    goal: item.preferences?.goal,
-    finish: item.preferences?.finish,
-    budget: item.preferences?.budget,
-    existingMakeup: item.preferences?.existingMakeup,
-    baseCoverage: item.preferences?.baseCoverage,
-    browStyle: item.preferences?.browStyle,
-    eyeFocus: item.preferences?.eyeFocus,
-    lipTexture: item.preferences?.lipTexture,
-    qualityPercent: signalPercent(item.signals?.quality),
-    luminancePercent: signalPercent(item.signals?.luminance),
-    warmthPercent: signalPercent(item.signals?.warmth),
-    renderVersion: item.renderVersion ?? "render-v5-natural-makeup",
-    note: item.note ?? "",
-    privacy: "no_image_or_video_frame",
-  }));
-
-  const testRows = readTestRuns().map((run) => ({
-    recordType: "photo_test",
-    recordId: run.id,
-    createdAt: run.at,
-    label: "测试记录",
-    sampleLabel: run.sampleLabel,
-    lookName: run.lookName,
-    recommendationSource: run.source,
-    recommendationConfidence: run.recommendationConfidence ?? "",
-    occasion: run.preferences?.occasion ?? "",
-    goal: run.preferences?.goal ?? "",
-    finish: run.preferences?.finish ?? "",
-    budget: run.preferences?.budget ?? "",
-    existingMakeup: run.preferences?.existingMakeup ?? "",
-    baseCoverage: run.preferences?.baseCoverage ?? "",
-    browStyle: run.preferences?.browStyle ?? "",
-    eyeFocus: run.preferences?.eyeFocus ?? "",
-    lipTexture: run.preferences?.lipTexture ?? "",
-    qualityPercent: run.quality ?? "",
-    luminancePercent: run.luminance ?? "",
-    warmthPercent: run.warmth ?? "",
-    qualityGate: run.qualityGate ?? "",
-    renderVersion: run.renderVersion ?? "",
-    issueTags: (run.issueTags ?? []).join(";"),
-    landmarkStabilityScore: run.scores?.landmarkStability ?? "",
-    lipEdgeScore: run.scores?.lipEdge ?? "",
-    lipTextureScore: run.scores?.lipTexture ?? "",
-    lipNaturalnessScore: run.scores?.lipNaturalness ?? "",
-    blushPlacementScore: run.scores?.blushPlacement ?? "",
-    blushColorScore: run.scores?.blushColor ?? "",
-    blushNaturalnessScore: run.scores?.blushNaturalness ?? "",
-    eyeshadowAlignmentScore: run.scores?.eyeshadowAlignment ?? "",
-    colorVisibilityScore: run.scores?.colorVisibility ?? "",
-    recommendationTasteScore: run.scores?.recommendationTaste ?? "",
-    explanationTrustScore: run.scores?.explanationTrust ?? "",
-    note: run.note,
-    privacy: "no_image_or_video_frame",
-  }));
-
-  const makeupStepFeedbackRows = readMakeupStepFeedback().map((item) => ({
-    recordType: "makeup_step_feedback",
-    recordId: item.id,
-    createdAt: item.at,
-    label: item.label,
-    makeupStepId: item.stepId,
-    makeupStepFeedback: item.value,
-    sampleLabel: "",
-    lookName: item.lookName,
-    occasion: item.preferences?.occasion,
-    goal: item.preferences?.goal,
-    finish: item.preferences?.finish,
-    budget: item.preferences?.budget,
-    existingMakeup: item.preferences?.existingMakeup,
-    baseCoverage: item.preferences?.baseCoverage,
-    browStyle: item.preferences?.browStyle,
-    eyeFocus: item.preferences?.eyeFocus,
-    lipTexture: item.preferences?.lipTexture,
-    renderVersion: item.renderVersion ?? "render-v5-natural-makeup",
-    note: item.stepLabel,
-    privacy: "no_image_or_video_frame",
-  }));
-
-  const friendReviewRows = readFriendReviews().map((review) => ({
-    recordType: "friend_review",
-    recordId: review.id,
-    createdAt: review.at,
-    label: "friend_test_summary",
-    lookName: review.lookName,
-    recommendationSource: review.recommendationSource,
-    recommendationConfidence: review.recommendationConfidence,
-    occasion: review.preferences?.occasion,
-    goal: review.preferences?.goal,
-    finish: review.preferences?.finish,
-    budget: review.preferences?.budget,
-    existingMakeup: review.preferences?.existingMakeup,
-    baseCoverage: review.preferences?.baseCoverage,
-    browStyle: review.preferences?.browStyle,
-    eyeFocus: review.preferences?.eyeFocus,
-    lipTexture: review.preferences?.lipTexture,
-    qualityPercent: signalPercent(review.signals?.quality),
-    luminancePercent: signalPercent(review.signals?.luminance),
-    warmthPercent: signalPercent(review.signals?.warmth),
-    renderVersion: review.renderVersion ?? "render-v5-natural-makeup",
-    privacyComfort: review.privacyComfort,
-    fitScore: review.fitScore,
-    naturalnessScore: review.naturalnessScore,
-    reuseIntent: review.reuseIntent,
-    note: review.note,
-    privacy: "no_image_or_video_frame",
-  }));
-
-  const expertRows = readExpertReviews().map((review) => ({
-    recordType: "expert_review",
-    recordId: review.id,
-    createdAt: review.at,
-    label: review.ratingLabel ?? expertRatingLabels[review.rating],
-    sampleLabel: review.sampleLabel,
-    lookName: review.lookName,
-    recommendationSource: review.recommendationSource,
-    recommendationConfidence: review.recommendationConfidence,
-    occasion: review.preferences?.occasion,
-    goal: review.preferences?.goal,
-    finish: review.preferences?.finish,
-    budget: review.preferences?.budget,
-    existingMakeup: review.preferences?.existingMakeup,
-    baseCoverage: review.preferences?.baseCoverage,
-    browStyle: review.preferences?.browStyle,
-    eyeFocus: review.preferences?.eyeFocus,
-    lipTexture: review.preferences?.lipTexture,
-    qualityPercent: signalPercent(review.signals?.quality),
-    luminancePercent: signalPercent(review.signals?.luminance),
-    warmthPercent: signalPercent(review.signals?.warmth),
-    renderVersion: review.renderVersion ?? "render-v5-natural-makeup",
-    note: review.note,
-    privacy: "no_image_or_video_frame",
-  }));
-
-  return [...testRows, ...feedbackRows, ...makeupStepFeedbackRows, ...friendReviewRows, ...expertRows].sort((a, b) =>
-    String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? ""))
-  );
-}
-
-function signalPercent(value) {
-  if (value == null || value === "") return "";
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? Math.round(numeric * 100) : "";
-}
-
-function toCsv(rows) {
-  const columns = [
-    ["recordType", "record_type"],
-    ["recordId", "record_id"],
-    ["createdAt", "created_at"],
-    ["label", "label"],
-    ["sampleLabel", "sample_label"],
-    ["lookName", "look_name"],
-    ["recommendationSource", "recommendation_source"],
-    ["recommendationConfidence", "recommendation_confidence"],
-    ["occasion", "occasion"],
-    ["goal", "goal"],
-    ["finish", "finish"],
-    ["budget", "budget"],
-    ["existingMakeup", "existing_makeup"],
-    ["baseCoverage", "base_coverage"],
-    ["browStyle", "brow_style"],
-    ["eyeFocus", "eye_focus"],
-    ["lipTexture", "lip_texture"],
-    ["qualityPercent", "quality_percent"],
-    ["luminancePercent", "luminance_percent"],
-    ["warmthPercent", "warmth_percent"],
-    ["qualityGate", "quality_gate"],
-    ["renderVersion", "render_version"],
-    ["makeupStepId", "makeup_step_id"],
-    ["makeupStepFeedback", "makeup_step_feedback"],
-    ["issueTags", "issue_tags"],
-    ["landmarkStabilityScore", "landmark_stability_score"],
-    ["lipEdgeScore", "lip_edge_score"],
-    ["lipTextureScore", "lip_texture_score"],
-    ["lipNaturalnessScore", "lip_naturalness_score"],
-    ["blushPlacementScore", "blush_placement_score"],
-    ["blushColorScore", "blush_color_score"],
-    ["blushNaturalnessScore", "blush_naturalness_score"],
-    ["eyeshadowAlignmentScore", "eyeshadow_alignment_score"],
-    ["colorVisibilityScore", "color_visibility_score"],
-    ["recommendationTasteScore", "recommendation_taste_score"],
-    ["explanationTrustScore", "explanation_trust_score"],
-    ["privacyComfort", "privacy_comfort"],
-    ["fitScore", "fit_score"],
-    ["naturalnessScore", "naturalness_score"],
-    ["reuseIntent", "reuse_intent"],
-    ["note", "note"],
-    ["privacy", "privacy"],
-  ];
-  const header = columns.map(([, label]) => csvCell(label)).join(",");
-  const body = rows.map((row) => columns.map(([key]) => csvCell(row[key])).join(","));
-  return [header, ...body].join("\r\n");
-}
-
-function csvCell(value) {
-  return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }
 
 function scaleActiveIntensity(scale) {
@@ -2206,7 +1761,7 @@ function scaleActiveIntensity(scale) {
   refs.lipValue.value = Math.round(activeLook.lipIntensity * 100);
   refs.blushValue.value = Math.round(activeLook.blushIntensity * 100);
   refs.eyeValue.value = Math.round(activeLook.eyeIntensity * 100);
-  if (mode === "photo") drawPhotoFrame();
+  if (appState.getState().mode === "photo") drawPhotoFrame();
 }
 
 function switchToAlternativeLook() {
@@ -2378,9 +1933,10 @@ function getBounds(points, padding) {
 }
 
 function point(landmark, mirrored) {
-  const x = (mirrored ? 1 - landmark.x : landmark.x) * refs.canvas.width;
-  const y = landmark.y * refs.canvas.height;
-  return { x, y };
+  return landmarkToCanvas(landmark, mirrored, {
+    width: refs.canvas.width,
+    height: refs.canvas.height,
+  });
 }
 
 function resizeCanvas(width, height) {
@@ -2413,7 +1969,7 @@ function captureCanvas() {
 }
 
 function stopLoop() {
-  running = false;
+  appState.update({ running: false });
   if (rafId) cancelAnimationFrame(rafId);
   rafId = null;
 }
