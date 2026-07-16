@@ -2,7 +2,7 @@ import {
   qualityGateFromSignals,
   qualityGateLabels,
   recommendationConfidenceCap,
-} from "./render-policy.mjs?v=7.3-continuous-cheek";
+} from "./render-policy.mjs?v=7.4-lip-fit";
 import { buildCompleteMakeupPlan } from "./makeup-plan.mjs";
 import { createCompatibleFaceLandmarker } from "./browser-runtime.mjs?v=7.3-architecture";
 import {
@@ -46,7 +46,7 @@ import {
   renderTestRunList,
   renderValidationState as renderValidationStateView,
 } from "./ui-renderer.mjs?v=7.3-architecture";
-import { createMakeupRenderer, makeupSideVisibility } from "./makeup-renderer.mjs?v=7.3-architecture";
+import { createMakeupRenderer, makeupSideVisibility } from "./makeup-renderer.mjs?v=7.4-lip-fit";
 import {
   buildReviewRows,
   feedbackLabel,

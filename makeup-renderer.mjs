@@ -22,14 +22,16 @@ import {
   adaptiveBlushCenters,
   adaptiveBlushProfile,
   adaptiveBlushSideScale,
+  lipFitRenderProfile,
   lipTextureRenderProfile,
-} from "./render-policy.mjs";
+} from "./render-policy.mjs?v=7.4-lip-fit";
 
 const defaultRenderPolicy = {
   adaptiveBlushColorProfile,
   adaptiveBlushCenters,
   adaptiveBlushProfile,
   adaptiveBlushSideScale,
+  lipFitRenderProfile,
   lipTextureRenderProfile,
 };
 
@@ -117,16 +119,36 @@ export function createMakeupRenderer({ ctx, canvas, renderPolicy = {} }) {
     const innerMouth = lipInner.map((index) => point(landmarks[index], mirrored));
     const upperPath = [...upperOuter, ...upperInner];
     const lowerPath = [...lowerOuter, ...lowerInner];
+    const fullLipPath = allOuter;
     const mouthWidth = Math.max(1, distance(point(landmarks[61], mirrored), point(landmarks[291], mirrored)));
     const faceWidth = Math.max(1, distance(point(landmarks[234], mirrored), point(landmarks[454], mirrored)));
     const mouthRatio = mouthWidth / faceWidth;
-    if (mouthOpen > 0.28 || yaw > 0.44 || mouthRatio < 0.08) {
-      lipDiagnostic.status = "skipped";
-      lipDiagnostic.reason = mouthOpen > 0.28 ? "mouth-unreliable" : yaw > 0.44 ? "profile-unreliable" : "lip-landmarks-uncertain";
+    const outerTop = point(landmarks[0], mirrored);
+    const outerBottom = point(landmarks[17], mirrored);
+    const innerTop = point(landmarks[13], mirrored);
+    const innerBottom = point(landmarks[14], mirrored);
+    const outerHeightRatio = distance(outerTop, outerBottom) / mouthWidth;
+    const contourOrdered =
+      [...allOuter, ...innerMouth].every((item) => Number.isFinite(item.x) && Number.isFinite(item.y)) &&
+      outerTop.y <= outerBottom.y + mouthWidth * 0.03 &&
+      innerTop.y <= innerBottom.y + mouthWidth * 0.03;
+    const fitProfile = policy.lipFitRenderProfile({
+      yaw,
+      mouthOpen,
+      mouthRatio,
+      outerHeightRatio,
+      contourOrdered,
+    });
+    lipDiagnostic.outerHeightRatio = Number(outerHeightRatio.toFixed(3));
+    lipDiagnostic.baseOpacityScale = fitProfile.baseOpacityScale;
+    lipDiagnostic.centerTintScale = fitProfile.centerTintScale;
+    if (fitProfile.status === "skipped") {
+      lipDiagnostic.status = fitProfile.status;
+      lipDiagnostic.reason = fitProfile.reason;
       return;
     }
-    lipDiagnostic.partial = mouthOpen > 0.1 || yaw > 0.12;
-    if (lipDiagnostic.partial) lipDiagnostic.reason = mouthOpen > 0.1 ? "partial-mouth-safe" : "partial-yaw-safe";
+    lipDiagnostic.partial = fitProfile.partial;
+    lipDiagnostic.reason = fitProfile.reason;
     const lipTone = sampleToneFromPoints([...allOuter, ...innerMouth], Math.max(4, mouthWidth * 0.025));
     const mouthComfort = clamp(mapRange(mouthOpen, 0.06, 0.24, 1, 0.72), 0.72, 1);
     const poseComfort = clamp(mapRange(yaw, 0.1, 0.44, 1, 0.62), 0.62, 1);
@@ -136,6 +158,7 @@ export function createMakeupRenderer({ ctx, canvas, renderPolicy = {} }) {
       makeupVisibilityMultiplier(lipTone, preferences.existingMakeup) *
       mouthComfort *
       poseComfort *
+      fitProfile.baseOpacityScale *
       (mode === "camera" ? 0.86 : 0.98);
     const edgeBlur = clamp(mouthWidth * 0.012, 0.8, 3.8);
     const eraseBlur = clamp(mouthWidth * mapRange(mouthOpen, 0.02, 0.12, 0.012, 0.032), 1.2, 5.6);
@@ -148,7 +171,7 @@ export function createMakeupRenderer({ ctx, canvas, renderPolicy = {} }) {
     };
 
     drawFeatheredFill({
-      paths: [upperPath, lowerPath],
+      paths: [fullLipPath],
       erasePaths: [innerMouth],
       color: rgbaFromRgb(lipSoftRgb, opacity * textureProfile.softAlpha),
       blur: edgeBlur * textureProfile.softBlurScale,
@@ -157,7 +180,7 @@ export function createMakeupRenderer({ ctx, canvas, renderPolicy = {} }) {
     });
 
     drawFeatheredFill({
-      paths: [upperPath, lowerPath],
+      paths: [fullLipPath],
       erasePaths: [innerMouth],
       color: rgbaFromRgb(lipRgb, opacity * textureProfile.pigmentAlpha),
       blur: edgeBlur * textureProfile.pigmentBlurScale,
@@ -165,14 +188,22 @@ export function createMakeupRenderer({ ctx, canvas, renderPolicy = {} }) {
       composite: "multiply",
     });
 
-    if (textureProfile.centerAlpha > 0) {
+    const centerTintOpacity = opacity * textureProfile.centerAlpha * fitProfile.centerTintScale;
+    const highlightProfile = {
+      ...textureProfile,
+      innerHighlightAlpha: textureProfile.innerHighlightAlpha * Math.max(0.42, fitProfile.centerTintScale),
+      glossSpotAlpha: textureProfile.glossSpotAlpha * fitProfile.centerTintScale,
+    };
+    lipDiagnostic.centerTintOpacity = Number(centerTintOpacity.toFixed(3));
+    lipDiagnostic.glossSpotAlpha = Number(highlightProfile.glossSpotAlpha.toFixed(3));
+    if (centerTintOpacity > 0) {
       drawLipCenterTint({
-        paths: [upperPath, lowerPath],
+        paths: [fullLipPath],
         erasePaths: [innerMouth],
         center: mouthCenter,
         radius: mouthWidth * textureProfile.centerRadiusScale,
         color: lipRgb,
-        opacity: opacity * textureProfile.centerAlpha,
+        opacity: centerTintOpacity,
         blur: edgeBlur * textureProfile.centerBlurScale,
         eraseBlur,
       });
@@ -200,7 +231,7 @@ export function createMakeupRenderer({ ctx, canvas, renderPolicy = {} }) {
       innerPoints: innerHighlightPoints,
       color: highlightRgb,
       opacity,
-      profile: textureProfile,
+      profile: highlightProfile,
       mouthWidth,
       eraseBlur,
     });

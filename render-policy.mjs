@@ -1,3 +1,5 @@
+import { mapRange } from "./render/geometry.mjs";
+
 export const qualityGateLabels = {
   good_for_tryon: "适合试妆",
   usable_but_unstable: "可用但不稳定",
@@ -57,17 +59,17 @@ const v5LipTextureRenderProfile = {
 const experimentalLipTextureRenderProfiles = {
   stain: {
     id: "stain",
-    softAlpha: 0.48,
-    pigmentAlpha: 0.24,
-    softBlurScale: 1.52,
-    pigmentBlurScale: 1.32,
+    softAlpha: 0.58,
+    pigmentAlpha: 0.36,
+    softBlurScale: 1.38,
+    pigmentBlurScale: 1.12,
     outlineHighlightAlpha: 0,
     innerHighlightAlpha: 0.01,
     highlightWidthScale: 0.014,
     highlightBlur: 0.8,
-    centerAlpha: 0.24,
-    centerBlurScale: 0.9,
-    centerRadiusScale: 0.38,
+    centerAlpha: 0.12,
+    centerBlurScale: 1.05,
+    centerRadiusScale: 0.58,
     glossSpotAlpha: 0,
     glossSpotWidthScale: 0.12,
     glossSpotHeightScale: 0.026,
@@ -133,6 +135,52 @@ export function lipTextureRenderProfile(texture, experimental = false) {
   if (!experimental) return { ...v5LipTextureRenderProfile };
   return {
     ...(experimentalLipTextureRenderProfiles[texture] ?? experimentalLipTextureRenderProfiles.stain),
+  };
+}
+
+export function lipFitRenderProfile({
+  yaw = 0,
+  mouthOpen = 0,
+  mouthRatio = 0,
+  outerHeightRatio = 0,
+  contourOrdered = true,
+} = {}) {
+  if (!contourOrdered || mouthRatio < 0.08 || outerHeightRatio < 0.055 || outerHeightRatio > 0.56) {
+    return {
+      status: "skipped",
+      reason: "lip-contour-unreliable",
+      partial: false,
+      baseOpacityScale: 0,
+      centerTintScale: 0,
+    };
+  }
+  if (mouthOpen > 0.28 || yaw > 0.34) {
+    return {
+      status: "skipped",
+      reason: mouthOpen > 0.28 ? "mouth-unreliable" : "profile-unreliable",
+      partial: false,
+      baseOpacityScale: 0,
+      centerTintScale: 0,
+    };
+  }
+
+  const partial = mouthOpen > 0.1 || yaw > 0.12;
+  return {
+    status: "rendered",
+    reason: partial ? (mouthOpen > 0.1 ? "partial-mouth-safe" : "partial-yaw-safe") : "",
+    partial,
+    baseOpacityScale: Number(
+      Math.min(
+        mapRange(Math.min(yaw, 0.28), 0.08, 0.28, 1, 0.72),
+        mapRange(Math.min(mouthOpen, 0.24), 0.06, 0.24, 1, 0.76),
+      ).toFixed(3),
+    ),
+    centerTintScale: Number(
+      Math.min(
+        mapRange(Math.min(yaw, 0.16), 0.05, 0.16, 1, 0),
+        mapRange(Math.min(mouthOpen, 0.14), 0.04, 0.14, 1, 0),
+      ).toFixed(3),
+    ),
   };
 }
 
